@@ -1,0 +1,11 @@
+# SimpleCloud shell
+
+The two control strips stay compact so tracks, album art and SoundCloud pages do the visual work. The local header is 52 px and the browser player is 60 px. Navigation sits left, search and pin sit right. The player reads left to right: transport, seek and times, then track identity and actions.
+
+`shell.css` owns the palette: graphite canvas `#202124`, strip surface `#292a2d`, text `#ededee`, secondary text `#bdbfc3`, and white `#fff` for focus, progress and selected states. Selection also has an underline or an icon fill, so it does not rely on color. The header's white **Listen** button pairs the headphones icon with a text label so it stands apart from the pin and window controls. Segoe UI keeps chrome legible; time readouts use tabular numerals. The one circular control is Play/Pause. Album art is remote SoundCloud content, not an app asset; if missing, the bar shows an authored note icon.
+
+Search history hangs directly below the header as a second strip: 28 px artwork (or a magnifier/note icon), title with the artist muted beside it, and a 235 px cap with a thin scrollbar. It pushes the SoundCloud view down instead of covering it, so the page stays clickable and the panel never floats over a native view it cannot paint above.
+
+The window has no native title bar. The cloud app icon sits at the far left of the browser header; it is decorative, not a button, and remains part of the drag surface. The artwork in `assets/cloud.png` is original to this project and also serves as the Windows executable and window icon, so the shelf and the taskbar carry the same mark. Drag the custom header in browser mode, or the hero in listening mode. Interactive controls remain clickable.
+
+Listening mode fits the hero edge to edge in a rounded window. The 48 px player appears over the bottom of the hero on hover or `F6`. When hidden, it takes no space or input and leaves no footer. The hero never reflows, and SoundCloud's own bar stays hidden in both modes.

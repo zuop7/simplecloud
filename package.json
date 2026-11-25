@@ -1,0 +1,39 @@
+{
+  "name": "simplecloud",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unofficial Windows desktop shell for SoundCloud: native player bar, decluttered pages, listening mode and optional ad blocking.",
+  "author": "zuop7",
+  "copyright": "Copyright © 2026 zuop7",
+  "license": "SEE LICENSE IN LICENSE",
+  "homepage": "https://github.com/zuop7/simplecloud#readme",
+  "repository": { "type": "git", "url": "git+https://github.com/zuop7/simplecloud.git" },
+  "bugs": { "url": "https://github.com/zuop7/simplecloud/issues" },
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "probe": "electron . --probe",
+    "test": "node --test",
+    "build:win": "electron-builder --win portable --x64"
+  },
+  "build": {
+    "appId": "com.simplecloud.desktop",
+    "productName": "SimpleCloud",
+    "artifactName": "${productName}-${version}-${arch}.exe",
+    "files": ["*.cjs", "*.css", "*.html", "shell.js", "assets/cloud.png"],
+    "asarUnpack": ["**/*.node"],
+    "npmRebuild": false,
+    "win": {
+      "icon": "assets/cloud.png",
+      "target": "portable"
+    }
+  },
+  "devDependencies": {
+    "electron": "45.5.0",
+    "electron-builder": "26.18.0"
+  },
+  "dependencies": {
+    "@ghostery/adblocker": "2.20.3",
+    "koffi": "3.3.8"
+  }
+}

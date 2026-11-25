@@ -1,0 +1,66 @@
+/* Keep first-party account/access controls and the original queue mounted. */
+header[role="banner"] .headerSearch,
+header[role="banner"] .header__navMenuItem[href="/discover"],
+header[role="banner"] .header__navMenuItem[href="/feed"],
+header[role="banner"] .header__navMenuItem[href="/you/library"],
+header[role="banner"] .header__creatorUpsell,
+header[role="banner"] .header__forArtistsButton,
+.creatorSubscriptionsButton,
+.mobileAppsModule,
+.l-footer,
+footer,
+.velvetCakeModule,
+.firstFansPromotionBanner,
+[class*="PromotionBanner"],
+[class*="upsell"],
+.searchOptions__footer,
+[class*="appPromo"],
+[class*="productBanner"] { display: none !important; }
+
+/* Profile: keep identity, stats and tabs; drop the featured/promo rail but
+   never a container that holds the profile header itself. */
+[role="main"] [class*="spotlight"]:not(:has(.profileHeader, .profileHeaderInfo, .sc-avatar)) { display: none !important; }
+
+/* Search: the results themselves stay; the promo tail does not. */
+.l-search [class*="relatedSearch"],
+.l-search [class*="searchSuggestions"] { display: none !important; }
+
+/* The site's 960 px column must not overflow when the queue drawer narrows
+   the view. Above 960 px the stock layout is untouched. */
+@media (max-width: 959px) {
+  .l-container,
+  .l-content,
+  .l-fluid-fixed { width: 100% !important; }
+}
+
+/* Listening mode: the waveform hero is the whole surface. */
+html.sc-listen header[role="banner"],
+html.sc-listen .l-footer { display: none !important; }
+
+/* Newer song pages render the hero in SoundCloud's same-origin crossfade
+   iframe. The bridge marks that frame and fits the hero to its height. */
+html.sc-listen,
+html.sc-listen body { overflow: hidden !important; }
+html.sc-listen .fullHero {
+  width: 100% !important;
+  max-width: none !important;
+  margin-inline: 0 !important;
+  border-radius: 0 !important;
+  user-select: none;
+}
+html.sc-listen iframe.sc-listen-frame {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  z-index: 2 !important;
+}
+
+/* Leave the base waveform and its seek controls intact. */
+html.sc-hide-comments .fullHero__waveform canvas.waveformCommentsNode,
+html.sc-hide-comments .fullHero__waveform .commentPopover,
+html.sc-hide-comments .fullHero__waveform .commentPlaceholder { display: none !important; }
+
+/* Hide the whole composited bar, but keep its seek rail measurable for the bridge. */
+.playControls, .playControls * { pointer-events: none !important; }
+.playControls { opacity: 0 !important; visibility: hidden !important; }

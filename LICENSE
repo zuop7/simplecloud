@@ -1,0 +1,36 @@
+SimpleCloud — Proprietary License
+Copyright (c) 2026 zuop7. All rights reserved.
+
+This software is not open source. No part of this repository — source code,
+documentation, artwork or build configuration — is licensed for reuse. You may
+not copy, modify, merge, publish, distribute, sublicense or sell it, in whole
+or in part, without prior written permission from the copyright holder.
+
+What you may do
+1. Download and run an official build published by the copyright holder on
+   your own computer, for personal, non-commercial use.
+2. Link to this repository or to an official release.
+
+What you may not do
+1. Redistribute, mirror or re-upload a build, or bundle it with other software.
+2. Publish modified versions, forks or derivative works, or build your own
+   binary from this source.
+3. Remove or alter notices, or present the software as your own.
+4. Use the software, its name or its artwork commercially without written
+   permission.
+
+Third-party components keep their own licenses. Electron, @ghostery/adblocker
+and koffi are not covered by this notice.
+
+SoundCloud is a trademark of SoundCloud Global Limited & Co. KG. SimpleCloud is
+an unofficial project and is not affiliated with, endorsed by or supported by
+SoundCloud.
+
+The software is provided "as is", without warranty of any kind, express or
+implied, including but not limited to the warranties of merchantability,
+fitness for a particular purpose and non-infringement. In no event shall the
+author be liable for any claim, damages or other liability, whether in an
+action of contract, tort or otherwise, arising from, out of or in connection
+with the software or its use.
+
+For permission, open an issue in this repository.
