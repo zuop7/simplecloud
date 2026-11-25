@@ -1,3 +1,4 @@
+![Uploading Cute Blushing Cloud Icon.png…]()
 # SimpleCloud
 
 An unofficial Windows desktop shell for SoundCloud. It loads the real
