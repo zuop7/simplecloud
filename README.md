@@ -1,4 +1,5 @@
-<img width="1254" height="1254" alt="Cute Blushing Cloud Icon" src="https://github.com/user-attachments/assets/85d6150a-37b6-46e6-80e9-5690535841ec" />
+<img width="300" height="300" alt="small-Cute Blushing Cloud Icon" src="https://github.com/user-attachments/assets/08f3b96a-448c-4b01-b2d6-3fa0a07c90ac" />
+
 
 # SimpleCloud
 
