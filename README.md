@@ -9,10 +9,16 @@ SimpleCloud does not fetch, decode or play audio itself. Every control is
 forwarded to SoundCloud's own player, so the site keeps working exactly as it
 does in a browser.
 
-> SimpleCloud is not affiliated with, endorsed by or supported by SoundCloud.
+**SoundCloud might reset your password when you first log in**
 
-<!-- Add a screenshot here once you have one that does not show your account:
-![SimpleCloud in listening mode](docs/screenshot.png) -->
+**SimpleCloud is not affiliated with, endorsed by or supported by SoundCloud**
+
+
+<img width="1190" height="314" alt="Annotation 2026-11-25 220810" src="https://github.com/user-attachments/assets/e1bf5a2e-0729-4d09-a7cc-1eaf85ba9f7e" />
+
+<img width="1201" height="828" alt="Capture" src="https://github.com/user-attachments/assets/5d44c6d9-37c3-4247-9c0b-378930df3a41" />
+
+
 
 ## Download
 
@@ -21,16 +27,11 @@ does in a browser.
 configure: double-click and sign in.
 
 The build is unsigned, so Windows SmartScreen will warn you the first time.
-Choose **More info → Run anyway**. Antivirus products sometimes flag unsigned
-apps that wrap a website; a portable build that extracts itself at launch is a
-common false positive.
+A portable build that extracts itself at launch is a common false positive.
 
 **Requirements:** Windows 10 or 11, 64-bit. A SoundCloud account for anything
 beyond browsing. **Continue with Google** is not supported inside the app — sign
-in with your email and password. If SoundCloud challenges the sign-in or asks
-for a password reset, stop retrying here and recover the account at
-soundcloud.com in your usual browser. The app shares no session with your
-browser and never imports one.
+in with your email and password. 
 
 ## What it does
 
@@ -129,9 +130,11 @@ modes.
 
 `0.1.0`, a personal tool published for testing. Expect breakage when SoundCloud
 changes its markup, since the shell depends on specific selectors documented in
-[`selectors.md`](selectors.md). Windows only so far. The rounded listening
+[`selectors.md`](selectors.md). The rounded listening
 window is drawn with a Win32 window region because Windows 10 has no native
 rounded corners.
+
+**Windows only so far, Macos in the future**
 
 ## License
 
