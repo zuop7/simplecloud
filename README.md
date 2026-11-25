@@ -1,4 +1,5 @@
-![Uploading Cute Blushing Cloud Icon.png…]()
+<img width="1254" height="1254" alt="Cute Blushing Cloud Icon" src="https://github.com/user-attachments/assets/85d6150a-37b6-46e6-80e9-5690535841ec" />
+
 # SimpleCloud
 
 An unofficial Windows desktop shell for SoundCloud. It loads the real
