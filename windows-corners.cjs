@@ -22,7 +22,7 @@ function createListeningCorners(window, screen) {
       const raw = {};
       if (!getWindowRect(hwnd, raw)) return false;
       const logical = window.getContentBounds();
-      const pixels = screen.dipToScreenRect(window, logical);
+      const pixels = screen.dipToScreenRect(null, logical);
       if (pixels.width < 1 || pixels.height < 1) return false;
       const x = pixels.x - raw.left;
       const y = pixels.y - raw.top;

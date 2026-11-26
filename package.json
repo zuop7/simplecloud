@@ -1,6 +1,6 @@
 {
   "name": "simplecloud",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Unofficial Windows desktop shell for SoundCloud: native player bar, decluttered pages, listening mode and optional ad blocking.",
   "author": "zuop7",

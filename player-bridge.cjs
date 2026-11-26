@@ -86,12 +86,28 @@ function readQueue(root, baseUrl) {
   });
 }
 
+function volumeSlider(root) {
+  return root?.querySelector('.volume__sliderWrapper[role="slider"]');
+}
+
+function readVolume(root) {
+  const slider = volumeSlider(root);
+  const control = slider?.closest('.volume');
+  if (!control) return {};
+  const muted = control.classList.contains('muted');
+  const value = slider.getAttribute('aria-valuenow')?.trim();
+  const level = control.getAttribute('data-level')?.trim();
+  const volume = muted ? 0 : value ? Number(value) : level ? Number(level) / 10 : NaN;
+  return Number.isFinite(volume) && volume >= 0 && volume <= 1 ? { volume, muted } : {};
+}
+
 function readPlayer(root, baseUrl) {
   if (!root) return null;
   const query = selector => root.querySelector(selector);
   const titleLink = query('.playbackSoundBadge__titleLink');
   const queue = readQueue(root, baseUrl);
-  if (!titleLink) return { status: 'idle', queue };
+  const volume = readVolume(root);
+  if (!titleLink) return { status: 'idle', queue, ...volume };
   const link = trackLink(titleLink.getAttribute('href'), baseUrl);
   const title = titleLink.title?.trim();
   const artistLink = query('.playbackSoundBadge__lightLink');
@@ -112,10 +128,32 @@ function readPlayer(root, baseUrl) {
     shuffle: toggleState(query(controlSelectors.shuffle)),
     repeat: toggleState(query(controlSelectors.repeat)),
     liked: toggleState(query(controlSelectors.like)),
+    ...volume,
     queue,
     controls: Object.fromEntries(Object.entries(controlSelectors)
       .map(([action, selector]) => [action, enabled(query(selector))]))
   };
+}
+
+function setVolume(slider, value) {
+  const rail = slider?.querySelector('.volume__sliderBackground');
+  if (!rail || !Number.isFinite(value) || value < 0 || value > 1) return false;
+  const send = (target, type) => {
+    const rect = rail.getBoundingClientRect();
+    if (rect.height <= 0) return false;
+    target.dispatchEvent(new MouseEvent(type, {
+      bubbles: true, cancelable: true, view: window, buttons: type === 'mouseup' ? 0 : 1,
+      clientX: rect.left + rect.width / 2,
+      // The SoundCloud grip travels below the painted end of the rail.
+      clientY: rect.bottom + (value === 0 ? 8 : 4) - rect.height * value
+    }));
+    return true;
+  };
+  if (!send(rail, 'mousedown')) return false;
+  // SoundCloud expands the control during mousedown, moving the rail.
+  send(document, 'mousemove');
+  send(document, 'mouseup');
+  return true;
 }
 
 // Let the site's track identity settle across two polls, then publish every
@@ -193,7 +231,8 @@ function routeInPlace(value) {
     if (anchor.matches('a.header__userNavUsernameButton')) return false;
     try {
       const url = new URL(anchor.getAttribute('href'), location.href);
-      return url.origin === target.origin && url.pathname === target.pathname && url.search === target.search;
+      return url.origin === target.origin && url.pathname === target.pathname
+        && url.search === target.search && url.hash === target.hash;
     } catch {
       return false;
     }
@@ -201,7 +240,7 @@ function routeInPlace(value) {
   const existing = [...document.querySelectorAll('a[href]')].find(matches);
   const anchor = existing ?? document.createElement('a');
   if (!existing) {
-    anchor.href = `${target.pathname}${target.search}`;
+    anchor.href = `${target.pathname}${target.search}${target.hash}`;
     anchor.hidden = true;
     document.body.append(anchor);
   }
@@ -244,6 +283,46 @@ function openTrack(value, report) {
   return true;
 }
 
+let browserPage, cancelScrollRestore;
+function setListeningMode(on) {
+  const root = document.documentElement;
+  if (on === root.classList.contains('sc-listen')) return;
+  cancelScrollRestore?.();
+  if (on) {
+    browserPage = { url: location.href, x: window.scrollX, y: window.scrollY };
+    root.classList.add('sc-listen');
+    window.scrollTo({ left: 0, top: 0, behavior: 'instant' });
+    fitListenFrame();
+    return;
+  }
+  root.classList.remove('sc-listen');
+  unfitListenFrame();
+  const page = browserPage;
+  browserPage = undefined;
+  if (!page) return;
+  if (location.href !== page.url && !routeInPlace(page.url)) return;
+  const deadline = performance.now() + 2500;
+  const restore = () => {
+    if (location.href === page.url) {
+      window.scrollTo({ left: page.x, top: page.y, behavior: 'instant' });
+      if (Math.abs(window.scrollY - page.y) < 2) return true;
+    }
+    return performance.now() >= deadline;
+  };
+  if (restore()) return;
+  const timer = setInterval(() => { if (restore()) cancel(); }, 50);
+  const cancel = cancelScrollRestore = () => {
+    clearInterval(timer);
+    cancelScrollRestore = undefined;
+    window.removeEventListener('wheel', cancel, true);
+    window.removeEventListener('pointerdown', cancel, true);
+    window.removeEventListener('keydown', cancel, true);
+  };
+  window.addEventListener('wheel', cancel, { capture: true, passive: true });
+  window.addEventListener('pointerdown', cancel, true);
+  window.addEventListener('keydown', cancel, true);
+}
+
 function runAction(name, value, report) {
   if (name === 'navigate') {
     if (switchSection(value)) return;
@@ -282,14 +361,7 @@ function runAction(name, value, report) {
     return;
   }
   if (name === 'listenMode') {
-    const on = value === true;
-    document.documentElement.classList.toggle('sc-listen', on);
-    if (on) {
-      window.scrollTo(0, 0);
-      fitListenFrame();
-    } else {
-      unfitListenFrame();
-    }
+    setListeningMode(value === true);
     return;
   }
   if (name === 'queueJump' || name === 'queueRemove') {
@@ -314,6 +386,13 @@ function runAction(name, value, report) {
   }
 
   const root = document.querySelector(playerSelector);
+  if (name === 'volume' || name === 'mute') {
+    if (name === 'volume' && setVolume(volumeSlider(root), value)) return;
+    const mute = root?.querySelector('.volume .volume__button');
+    if (name === 'mute' && enabled(mute)) { mute.click(); return; }
+    report('SoundCloud volume is not available yet.');
+    return;
+  }
   const control = root?.querySelector(controlSelectors[name]);
   if (!enabled(control)) { report('That player control isn\'t available.'); return; }
   if (name !== 'seek') { control.click(); return; }
@@ -806,7 +885,7 @@ if (process.type === 'renderer') {
     // A result counts as opened when its link is actually followed from the
     // results page. Play buttons and modified clicks are ignored.
     document.addEventListener('click', event => {
-      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      if (!event.isTrusted || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       if (location.pathname !== '/search' && !location.pathname.startsWith('/search/')) return;
       const anchor = event.target?.closest?.('a[href]');
       if (!anchor || anchor.target || anchor.hasAttribute('download')) return;

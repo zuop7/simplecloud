@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { app, BrowserWindow, Menu, MenuItem, WebContentsView, dialog, screen, shell: desktopShell } = require('electron');
+const { app, BaseWindow, BrowserWindow, Menu, MenuItem, WebContentsView, dialog, screen, shell: desktopShell } = require('electron');
 const searchHistory = require('./search-history.cjs');
 const { createNetworkFilter, sources: filterSources } = require('./network-filter.cjs');
 
@@ -10,6 +10,7 @@ const home = 'https://soundcloud.com/discover';
 const accountSettings = 'https://soundcloud.com/settings';
 const probe = process.argv.includes('--probe');
 const safeMode = process.argv.includes('--safe-mode');
+const showShell = !probe || Boolean(process.env.SIMPLECLOUD_PROBE_SCREENSHOT);
 if (probe) {
   const probeData = path.join(os.tmpdir(), 'simplecloud-probe');
   fs.mkdirSync(probeData, { recursive: true });
@@ -139,6 +140,13 @@ function openShell() {
     ...(process.platform === 'win32' && { accentColor: false }),
     autoHideMenuBar: true, show: false, backgroundColor: shellBackground
   });
+  // A second native host, without a renderer or a second SoundCloud session.
+  const listeningWindow = new BaseWindow({
+    title: 'SimpleCloud — Listening', icon: appIcon, width: listenWidth, height: listenHeight,
+    minWidth: minListenWidth, minHeight: minListenHeight, frame: false, roundedCorners: true,
+    ...(process.platform === 'win32' && { accentColor: false }),
+    maximizable: false, autoHideMenuBar: true, show: false, backgroundColor: shellBackground
+  });
   const shellView = new WebContentsView({
     webPreferences: { ...webPreferences, preload: path.join(__dirname, 'shell-preload.cjs') }
   });
@@ -160,7 +168,7 @@ function openShell() {
   let listeningCorners;
   if (process.platform === 'win32') {
     try {
-      listeningCorners = require('./windows-corners.cjs').createListeningCorners(window, screen);
+      listeningCorners = require('./windows-corners.cjs').createListeningCorners(listeningWindow, screen);
     } catch (error) {
       console.warn('[shell] Could not initialize Windows corners:', error.message);
     }
@@ -170,7 +178,9 @@ function openShell() {
   let queueOpen = false;
   let siteTop = headerHeight;
   let mode = 'browser';
-  let browserView;
+  let listeningPositioned = false;
+  let quitting = false;
+  const activeWindow = () => mode === 'listen' ? listeningWindow : window;
   let dragOrigin;
   let settingsMenu;
   let listenHover = false;
@@ -180,11 +190,11 @@ function openShell() {
   let cornersApplied = false;
   const showListenBar = () => {
     const visible = mode !== 'listen' || queueOpen || listenHover || listenKeyboard;
-    if (!visible && shell.isFocused() && window.isFocused()) site.focus();
+    if (!visible && shell.isFocused() && listeningWindow.isFocused()) site.focus();
     shellView.setVisible(visible);
   };
   const updateListenBar = (point, now = performance.now()) => {
-    const { x, y, width, height } = window.getContentBounds();
+    const { x, y, width, height } = listeningWindow.getContentBounds();
     const bottom = y + height - (queueOpen ? queueHeight : 0);
     const depth = listenHover ? listenBarHeight + 6 : listenHoverEdge;
     const next = !dragOrigin && point.x >= x && point.x < x + width
@@ -199,14 +209,15 @@ function openShell() {
     listenHover = next;
     showListenBar();
   };
-  window.on('blur', () => {
+  listeningWindow.on('blur', () => {
+    if (mode !== 'listen') return;
     dragOrigin = undefined;
     listenKeyboard = listenHover = false;
     hoverChangedAt = undefined;
     showListenBar();
   });
   const layout = () => {
-    const [width, height] = window.getContentSize();
+    const [width, height] = activeWindow().getContentSize();
     if (mode === 'listen') {
       const heroHeight = height - (queueOpen ? queueHeight : 0);
       view.setBounds({ x: 0, y: 0, width, height: heroHeight });
@@ -221,32 +232,42 @@ function openShell() {
     view.setBounds({ x: 0, y: siteTop, width: viewWidth, height: Math.max(0, height - siteTop - playerHeight) });
   };
   layout();
-  window.on('resize', layout);
-  window.on('move', () => {
+  window.on('resize', () => { if (mode === 'browser') layout(); });
+  listeningWindow.on('resize', () => { if (mode === 'listen') layout(); });
+  listeningWindow.on('move', () => {
     if (mode === 'listen') cornersApplied = listeningCorners?.apply() ?? false;
   });
   if (savedPin) window.setAlwaysOnTop(true);
-  if (!probe) {
+  if (savedPin) listeningWindow.setAlwaysOnTop(true);
+  if (showShell) {
     shell.once('did-finish-load', () => {
       if (maximized) window.maximize();
       window.show();
       shell.focus();
     });
+  }
+  if (!probe) {
     window.on('close', () => {
       try {
-        const saved = mode === 'listen' && browserView ? browserView : {
-          bounds: window.getNormalBounds(), maximized: window.isMaximized()
-        };
         fs.writeFileSync(geometryFile, JSON.stringify({
-          ...saved.bounds, maximized: saved.maximized, pinned: window.isAlwaysOnTop()
+          ...window.getNormalBounds(), maximized: window.isMaximized(), pinned: window.isAlwaysOnTop()
         }));
       } catch (error) {
         console.warn('[shell] Could not save window position:', error.message);
       }
     });
   }
+  const markQuitting = () => { quitting = true; };
+  app.on('before-quit', markQuitting);
+  listeningWindow.on('close', event => {
+    if (quitting) return;
+    event.preventDefault();
+    leaveListen();
+  });
   window.on('closed', () => {
+    app.off('before-quit', markQuitting);
     clearInterval(hoverTimer);
+    if (!listeningWindow.isDestroyed()) listeningWindow.destroy();
     if (!shell.isDestroyed()) shell.close();
     if (!site.isDestroyed()) site.close();
   });
@@ -267,7 +288,7 @@ function openShell() {
     shell.send('simplecloud:focus-search');
   };
   const toggleListen = (event, input) => {
-    if (input.type !== 'keyDown' || input.key?.toLowerCase() !== 'l') return;
+    if (input.type !== 'keyDown' || input.isAutoRepeat || input.key?.toLowerCase() !== 'l') return;
     if (!input.control || !input.shift || input.alt || input.meta) return;
     event.preventDefault();
     if (mode === 'listen') leaveListen();
@@ -303,10 +324,10 @@ function openShell() {
     }
   });
 
-  let state, serialized, route, ready, scriptNavigation;
+  let state, serialized, route, ready, scriptNavigation, followRequest;
   const broadcast = () => {
     if (ready && !shell.isDestroyed()) {
-      shell.send('simplecloud:shell-state', { state, route, pinned: window.isAlwaysOnTop(), mode });
+      shell.send('simplecloud:shell-state', { state, route, pinned: activeWindow().isAlwaysOnTop(), mode });
     }
   };
   const report = message => {
@@ -319,77 +340,99 @@ function openShell() {
     if (ready && !shell.isDestroyed()) shell.send('simplecloud:search-history', history);
   };
   const followPlayback = () => {
-    if (mode !== 'listen' || state?.status !== 'track' || scriptNavigation?.until > Date.now()) return;
+    if (mode !== 'listen' || state?.status !== 'track') return;
+    const now = Date.now();
+    if (followRequest?.url === state.trackUrl && followRequest.until > now) return;
     try {
       const current = new URL(site.getURL());
       if (current.pathname.replace(/\/$/, '') === new URL(state.trackUrl).pathname.replace(/\/$/, '')) return;
     } catch {
       return;
     }
-    scriptNavigation = { target: null, until: Date.now() + 3500 };
+    followRequest = { url: state.trackUrl, until: now + 3500 };
+    scriptNavigation = { target: undefined, until: followRequest.until };
     site.send('simplecloud:site-action', 'openUrl', state.trackUrl);
   };
   const enterListen = () => {
     if (mode === 'listen') return;
-    browserView = { bounds: window.getNormalBounds(), maximized: window.isMaximized() };
-    if (window.isMaximized()) window.unmaximize();
-    queueOpen = false;
+    if (!state || !isPlayerPage(site.getURL())) { report('Wait for SoundCloud to finish loading.'); return; }
+    const browserBounds = window.getBounds();
+    const position = listeningPositioned ? listeningWindow.getBounds() : browserBounds;
+    const area = screen.getDisplayMatching(position).workArea;
+    const [usualWidth, usualHeight] = listeningWindow.getContentSize();
+    const extraHeight = queueOpen ? queueHeight : 0;
+    const width = Math.min(listeningPositioned ? usualWidth : listenWidth, area.width);
+    const height = Math.min((listeningPositioned ? usualHeight : listenHeight) + extraHeight, area.height);
+    listeningWindow.setMinimumSize(minListenWidth, minListenHeight + extraHeight);
+    listeningWindow.setContentSize(width, height);
+    const bounds = listeningWindow.getBounds();
+    listeningWindow.setPosition(
+      Math.max(area.x, Math.min(position.x, area.x + area.width - bounds.width)),
+      Math.max(area.y, Math.min(position.y, area.y + area.height - bounds.height))
+    );
+    listeningPositioned = true;
+    site.send('simplecloud:site-action', 'listenMode', true);
+    shell.send('simplecloud:blur-search');
+    siteTop = headerHeight;
     mode = 'listen';
+    followRequest = undefined;
     listenHover = listenKeyboard = false;
     hoverChangedAt = undefined;
-    window.contentView.addChildView(shellView);
+    window.contentView.removeChildView(view);
+    window.contentView.removeChildView(shellView);
+    listeningWindow.contentView.addChildView(view);
+    listeningWindow.contentView.addChildView(shellView);
+    broadcast();
+    layout();
+    if (showShell) {
+      listeningWindow.show();
+      window.hide();
+    }
     if (!probe) {
       hoverTimer = setInterval(() => {
-        if (window.isFocused() || (window.isAlwaysOnTop() && !window.isMinimized())) {
+        if (listeningWindow.isFocused() || (listeningWindow.isAlwaysOnTop() && !listeningWindow.isMinimized())) {
           updateListenBar(screen.getCursorScreenPoint());
         }
       }, 40);
     }
-    shell.send('simplecloud:blur-search');
-    window.setMinimumSize(minListenWidth, minListenHeight);
-    const area = screen.getDisplayMatching(browserView.bounds).workArea;
-    window.setContentSize(Math.min(listenWidth, area.width), Math.min(listenHeight, area.height));
-    const bounds = window.getBounds();
-    window.setPosition(
-      Math.max(area.x, Math.min(browserView.bounds.x, area.x + area.width - bounds.width)),
-      Math.max(area.y, Math.min(browserView.bounds.y, area.y + area.height - bounds.height))
-    );
-    broadcast();
-    layout();
     site.focus();
-    site.send('simplecloud:site-action', 'listenMode', true);
     followPlayback();
   };
   const leaveListen = () => {
-    if (mode !== 'listen' || !browserView) return;
+    if (mode !== 'listen') return;
     dragOrigin = undefined;
     clearInterval(hoverTimer);
     mode = 'browser';
-    if (listeningCorners && !listeningCorners.clear()) console.warn('[shell] Could not clear the listening window shape.');
+    listeningWindow.contentView.removeChildView(shellView);
+    listeningWindow.contentView.removeChildView(view);
+    window.contentView.addChildView(shellView);
     window.contentView.addChildView(view);
-    queueOpen = false;
-    shell.send('simplecloud:blur-search');
-    window.setMinimumSize(minWidth, minHeight);
-    window.setBounds(browserView.bounds);
-    if (browserView.maximized) window.maximize();
-    browserView = undefined;
+    listeningWindow.hide();
+    if (queueOpen) {
+      const [width, height] = listeningWindow.getContentSize();
+      listeningWindow.setMinimumSize(minListenWidth, minListenHeight);
+      listeningWindow.setContentSize(width, height - queueHeight);
+    }
+    scriptNavigation = undefined;
+    site.send('simplecloud:site-action', 'listenMode', false);
     broadcast();
     layout();
-    site.send('simplecloud:site-action', 'listenMode', false);
+    if (showShell) window.show();
+    site.focus();
   };
   const from = (event, allow) => event.senderFrame && !event.senderFrame.parent && allow(event.senderFrame.url);
   site.ipc.on('simplecloud:listen-drag', (event, phase) => {
-    if (mode !== 'listen' || !window.isFocused() || !from(event, isPlayerPage)) return;
+    if (mode !== 'listen' || !listeningWindow.isFocused() || !from(event, isPlayerPage)) return;
     if (phase === 'end') {
       dragOrigin = undefined;
     } else if (phase === 'start') {
       const { x, y } = screen.getCursorScreenPoint();
-      const bounds = window.getBounds();
+      const bounds = listeningWindow.getBounds();
       if (x < bounds.x || y < bounds.y || x >= bounds.x + bounds.width || y >= bounds.y + bounds.height) return;
       dragOrigin = { x: x - bounds.x, y: y - bounds.y };
     } else if (phase === 'move' && dragOrigin) {
       const { x, y } = screen.getCursorScreenPoint();
-      window.setPosition(x - dragOrigin.x, y - dragOrigin.y);
+      listeningWindow.setPosition(x - dragOrigin.x, y - dragOrigin.y);
     }
   });
   shell.ipc.on('simplecloud:shell-ready', event => {
@@ -412,22 +455,24 @@ function openShell() {
       if (name === 'settings') { settingsMenu?.popup({ window }); return; }
     }
     if (name === 'pin') {
-      window.setAlwaysOnTop(!window.isAlwaysOnTop());
+      const pinned = !activeWindow().isAlwaysOnTop();
+      window.setAlwaysOnTop(pinned);
+      listeningWindow.setAlwaysOnTop(pinned);
       broadcast();
       return;
     }
     if (name === 'queuePanel') {
       const open = value === true;
       if (mode === 'listen' && open !== queueOpen) {
-        const [width, height] = window.getContentSize();
+        const [width, height] = listeningWindow.getContentSize();
         if (open) {
-          window.setMinimumSize(minListenWidth, minListenHeight + queueHeight);
+          listeningWindow.setMinimumSize(minListenWidth, minListenHeight + queueHeight);
           queueOpen = true;
-          window.setContentSize(width, height + queueHeight);
+          listeningWindow.setContentSize(width, height + queueHeight);
         } else {
-          window.setMinimumSize(minListenWidth, minListenHeight);
+          listeningWindow.setMinimumSize(minListenWidth, minListenHeight);
           queueOpen = false;
-          window.setContentSize(width, height - queueHeight);
+          listeningWindow.setContentSize(width, height - queueHeight);
         }
       } else {
         queueOpen = open;
@@ -441,6 +486,7 @@ function openShell() {
       return;
     }
     if (name === 'searchPanel') {
+      if (mode !== 'browser') return;
       siteTop = Number.isFinite(value)
         ? Math.min(Math.max(headerHeight, Math.round(value)), headerHeight + 420)
         : headerHeight;
@@ -463,8 +509,9 @@ function openShell() {
       || !/^\/[^/]+\/[^/]+$/.test(new URL(value).pathname))) return;
     if (name === 'seek' && (typeof value?.trackId !== 'string' || value.trackId !== state?.trackId
       || !Number.isFinite(value.ratio) || value.ratio < 0 || value.ratio > 1)) return;
+    if (name === 'volume' && (!Number.isFinite(value) || value < 0 || value > 1)) return;
     if ((name === 'queueJump' || name === 'queueRemove') && typeof value?.trackId !== 'string') return;
-    if (!transport.has(name) && !['seek', 'navigate', 'search', 'openUrl', 'queueJump', 'queueRemove', 'queueClear', 'recover'].includes(name)) return;
+    if (!transport.has(name) && !['seek', 'volume', 'mute', 'navigate', 'search', 'openUrl', 'queueJump', 'queueRemove', 'queueClear', 'recover'].includes(name)) return;
     if (name === 'navigate' || name === 'search') {
       scriptNavigation = { target: name === 'search' ? 'search' : value, until: Date.now() + 3500 };
       if (name === 'search') setHistory(searchHistory.addEntry(history, searchHistory.queryEntry(value)));
@@ -636,6 +683,18 @@ function openShell() {
 
   async function checkListeningMode() {
     const before = window.getContentSize();
+    const browserBounds = window.getBounds();
+    const browserUrl = site.getURL();
+    const initialDocument = await site.executeJavaScript('performance.timeOrigin');
+    const preservedScroll = await site.executeJavaScript(`(() => {
+      const spacer = document.createElement('div');
+      spacer.id = 'simplecloud-scroll-fixture';
+      spacer.style.height = '2000px';
+      document.body.append(spacer);
+      window.scrollTo({ top: 160, behavior: 'instant' });
+      return scrollY;
+    })()`);
+    if (preservedScroll !== 160) throw new Error('The browser scroll fixture is not scrollable.');
     await site.executeJavaScript(`(() => {
       const frame = document.createElement('iframe');
       frame.id = 'simplecloud-listening-fixture';
@@ -678,12 +737,30 @@ function openShell() {
       scrolls: document.documentElement.scrollHeight > innerHeight || document.body.scrollHeight > innerHeight,
       strip: Math.round(document.querySelector('.player').getBoundingClientRect().height)
     }))()`);
-    const base = window.getContentSize();
+    const base = listeningWindow.getContentSize();
     const listenBounds = view.getBounds();
     if (!started.listen || started.header !== 'none' || started.scrolls || shellView.getVisible() || started.strip !== listenBarHeight
       || listenBounds.y !== 0 || listenBounds.height !== base[1]) {
       throw new Error(`Listening layout is wrong: ${JSON.stringify({ started, listenBounds, base })}`);
     }
+    if (!listeningWindow.contentView.children.includes(view) || !listeningWindow.contentView.children.includes(shellView)
+      || window.contentView.children.includes(view) || JSON.stringify(window.getBounds()) !== JSON.stringify(browserBounds)) {
+      throw new Error('Detaching did not move the existing views into a separate host while preserving the browser bounds.');
+    }
+    if (showShell && (!listeningWindow.isVisible() || window.isVisible())) {
+      throw new Error('Detached mode did not show just the compact window.');
+    }
+    const detachControl = await shell.executeJavaScript(`document.querySelector('[data-action="mode"] use').getAttribute('href')`);
+    if (detachControl !== '#i-listen') throw new Error('The dock button did not keep the headphones icon.');
+    listeningWindow.setContentSize(minListenWidth, base[1]);
+    const fitsCompact = await shell.executeJavaScript(`(() => {
+      const bar = document.querySelector('.player');
+      const controls = document.querySelector('.track-actions');
+      return controls.getBoundingClientRect().right <= bar.getBoundingClientRect().right
+        && getComputedStyle(document.getElementById('volume')).display !== 'none';
+    })()`);
+    listeningWindow.setContentSize(...base);
+    if (!fitsCompact) throw new Error('The listening player overflows at its minimum width.');
     if (process.platform === 'win32' && !cornersApplied) throw new Error('The Windows listening corner mask was not applied.');
     if (!await site.executeJavaScript(`document.documentElement.classList.contains('sc-listen')`)) {
       throw new Error('SoundCloud did not switch its own chrome for listening mode.');
@@ -714,7 +791,7 @@ function openShell() {
     hideComments = true;
     applyCommentPreference();
     await checkHeroActions(true);
-    const content = window.getContentBounds();
+    const content = listeningWindow.getContentBounds();
     const edge = { x: content.x + 40, y: content.y + content.height - 2 };
     const hero = { x: content.x + 40, y: content.y + 40 };
     updateListenBar(edge, 0);
@@ -740,7 +817,7 @@ function openShell() {
     if (shellView.getVisible()) throw new Error('Escape did not hide the keyboard-revealed bar.');
     await shell.executeJavaScript(`document.querySelector('[data-action="queue"]').click()`);
     await new Promise(resolve => setTimeout(resolve, 500));
-    const grown = window.getContentSize();
+    const grown = listeningWindow.getContentSize();
     const drawer = await shell.executeJavaScript(`(() => {
       const box = document.querySelector('.queue').getBoundingClientRect();
       return { height: Math.round(box.height), bottom: Math.round(innerHeight - box.bottom),
@@ -751,9 +828,6 @@ function openShell() {
        || view.getBounds().height !== grown[1] - queueHeight) {
       throw new Error(`Listening queue is wrong: ${JSON.stringify({ drawer, grown, base, view: view.getBounds() })}`);
     }
-    await shell.executeJavaScript(`document.getElementById('queue-close').click()`);
-    await new Promise(resolve => setTimeout(resolve, 450));
-    if (window.getContentSize()[1] !== base[1]) throw new Error('Listening queue did not release the window.');
     await shell.executeJavaScript(`document.querySelector('[data-action="mode"]').click()`);
     await new Promise(resolve => setTimeout(resolve, 700));
     const restored = await shell.executeJavaScript(`(() => ({
@@ -766,16 +840,28 @@ function openShell() {
     const size = window.getContentSize();
     if (restored.listen || restored.drag !== 'drag' || restored.noDrag !== 'no-drag' || restored.settingsIcon !== 24
       || restored.top !== headerHeight || view.getBounds().y !== headerHeight
-      || size[0] !== before[0] || size[1] !== before[1]) {
+       || size[0] !== before[0] || size[1] !== before[1] || !window.contentView.children.includes(view)
+       || listeningWindow.contentView.children.includes(view) || listeningWindow.getContentSize()[1] !== base[1]) {
       throw new Error(`Browser layout was not restored: ${JSON.stringify({ restored, size, before })}`);
     }
     if (await site.executeJavaScript(`document.documentElement.classList.contains('sc-listen')`)) {
       throw new Error('SoundCloud kept the listening chrome after leaving.');
     }
+    if (showShell && (!window.isVisible() || listeningWindow.isVisible())) {
+      throw new Error('Docking did not show just the browser window.');
+    }
+    if (site.getURL() !== browserUrl || await site.executeJavaScript('scrollY') !== preservedScroll
+      || !queueOpen || view.getBounds().width !== size[0] - queueWidth) {
+      throw new Error('Reattaching lost the browser location, scroll position, or open queue.');
+    }
+    await shell.executeJavaScript(`document.getElementById('queue-close').click()`);
     await checkHeroActions(false);
     hideComments = false;
     applyCommentPreference();
-    await site.executeJavaScript(`document.getElementById('simplecloud-listening-fixture').remove()`);
+    await site.executeJavaScript(`
+      document.getElementById('simplecloud-listening-fixture').remove();
+      document.getElementById('simplecloud-scroll-fixture').remove();
+    `);
     await site.sendInputEvent({ type: 'keyDown', keyCode: 'L', modifiers: ['control', 'shift'] });
     await site.sendInputEvent({ type: 'keyUp', keyCode: 'L', modifiers: ['control', 'shift'] });
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -789,7 +875,66 @@ function openShell() {
       || view.getBounds().y !== headerHeight || window.getContentSize()[1] !== before[1]) {
       throw new Error('Ctrl+Shift+L did not restore browser mode.');
     }
+    enterListen();
+    const waitForRoute = async predicate => {
+      const deadline = Date.now() + 4000;
+      while (!predicate(new URL(site.getURL())) && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      if (!predicate(new URL(site.getURL()))) throw new Error(`In-page route check timed out at ${site.getURL()}`);
+    };
+    site.send('simplecloud:site-action', 'search', 'simplecloud-detached');
+    await waitForRoute(url => url.searchParams.get('q') === 'simplecloud-detached');
+    listeningWindow.close();
+    if (mode !== 'browser' || listeningWindow.isDestroyed() || !window.contentView.children.includes(view)) {
+      throw new Error('Closing the listening window did not dock the player.');
+    }
+    await waitForRoute(url => url.href === browserUrl);
+    if (await site.executeJavaScript('performance.timeOrigin') !== initialDocument) {
+      throw new Error('Detaching or returning to the browser page reloaded SoundCloud.');
+    }
     console.log('[probe] Listening mode:', JSON.stringify({ browser: before, listening: base, grown, restored: size }));
+  }
+
+  async function checkVolume() {
+    const setLevel = value => shell.executeJavaScript(`(() => {
+      const slider = document.getElementById('volume');
+      slider.value = ${value};
+      slider.dispatchEvent(new Event('input'));
+    })()`);
+    const waitForVolume = async expected => {
+      const deadline = Date.now() + 2500;
+      do {
+        const value = await shell.executeJavaScript(`(() => {
+          const slider = document.getElementById('volume');
+          return slider.disabled ? null : slider.valueAsNumber;
+        })()`);
+        if (value !== null && expected === undefined) return value;
+        const native = await site.executeJavaScript(`(() => {
+          const value = document.querySelector('.volume__sliderWrapper')?.getAttribute('aria-valuenow');
+          return value ? Number(value) * 100 : null;
+        })()`);
+        const tolerance = expected === 0 ? 0 : 1;
+        if (value !== null && native !== null
+          && Math.abs(value - expected) <= tolerance && Math.abs(native - expected) <= tolerance) return value;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      } while (Date.now() < deadline);
+      throw new Error(`The shell and SoundCloud did not agree on volume (${expected ?? 'initial level'}).`);
+    };
+    const clickMute = () => shell.executeJavaScript(`document.getElementById('mute').click()`);
+    const original = await waitForVolume();
+    const target = original === 45 ? 70 : 45;
+    await setLevel(target);
+    await waitForVolume(target);
+    await clickMute();
+    await waitForVolume(0);
+    await clickMute();
+    await waitForVolume(target);
+    await setLevel(0);
+    await waitForVolume(0);
+    await setLevel(original);
+    await waitForVolume(original);
+    console.log('[probe] Volume and mute follow the native SoundCloud player.');
   }
 
   async function checkProbe() {
@@ -857,6 +1002,7 @@ function openShell() {
         await site.executeJavaScript(`document.getElementById('simplecloud-comments-fixture').remove()`);
       }
       console.log('[probe] Waveform comment markers and popovers hide and restore; regular comments and seeking stay visible.');
+      await checkVolume();
       const slot = await shell.executeJavaScript(`(() => {
         const box = document.querySelector('.site-slot').getBoundingClientRect();
         return { top: box.top, bottom: innerHeight - box.bottom, width: box.width, loaded: !!window.simpleCloud };
@@ -895,7 +1041,7 @@ function openShell() {
         throw new Error('SoundCloud view did not return to full width.');
       }
       console.log('[probe] Shell view and queue drawer aligned. Submitting a search.');
-      let searched = false;
+      let searched = false, returnedHome = false;
       site.on('did-navigate-in-page', (_event, url, isMainFrame) => {
         if (!isMainFrame) return;
         const target = new URL(url);
@@ -931,7 +1077,8 @@ function openShell() {
               app.exit(1);
             }
           }, 400);
-        } else if (searched && target.pathname === '/discover') {
+        } else if (searched && !returnedHome && target.pathname === '/discover') {
+          returnedHome = true;
           setTimeout(async () => {
             try {
               const modules = await site.executeJavaScript(`(() => {

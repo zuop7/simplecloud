@@ -26,7 +26,7 @@ does in a browser.
 ## Download
 
 [**Latest release**](https://github.com/zuop7/simplecloud/releases/latest) —
-`SimpleCloud-0.1.0-x64.exe`, portable. No installer, no Node.js, nothing to
+choose the portable Windows x64 `.exe`. No installer or Node.js; nothing to
 configure: double-click and sign in.
 
 The build is unsigned, so Windows SmartScreen will warn you the first time.
@@ -41,12 +41,12 @@ in with your email and password.
 **Browser mode.** SimpleCloud's own 52 px header replaces SoundCloud's nav:
 Home, Feed, Library, Favourites, Profile, search, an always-on-top pin and the
 listening-mode button. The bar along the bottom shows the current track with
-previous, play/pause, next, shuffle, repeat, seek and like. There is deliberately
-no volume control and no add-to-playlist: use Windows for volume and output
-device, and **Next up** for the queue.
+previous, play/pause, next, shuffle, repeat, seek and like. The volume slider and
+mute button control SoundCloud's own level. Use **Next up** for the queue.
 
-**Listening mode** (`Ctrl+Shift+L`). The waveform hero fills a 1180×300 window
-with rounded corners. The player bar stays hidden until you hover the bottom
+**Listening mode** (`Ctrl+Shift+L`). The headphones button detaches the live
+player into a 1180×300 window without reloading SoundCloud. Click the headphones
+again or close the compact window to dock it. The player bar stays hidden until you hover the bottom
 edge or press `F6`, then it overlays the hero instead of shrinking it, so no
 footer or second bar ever appears. `Esc` hides it again, **Next up** grows the
 window downward, and the window follows whichever track is playing.
@@ -92,7 +92,7 @@ site in the same local session to confirm whether the skin is at fault.
 | `F6` / `Esc` | Show / hide and focus the listening bar |
 | `Ctrl+Shift+D` | Diagnostics |
 | `Alt` | Application menu |
-| `Alt+F4` | Close |
+| `Alt+F4` | Dock listening mode or close the app in browser mode |
 
 ## Privacy
 
@@ -131,7 +131,7 @@ modes.
 
 ## Status
 
-`0.1.0`, a personal tool published for testing. Expect breakage when SoundCloud
+`0.2.0` development build. Expect breakage when SoundCloud
 changes its markup, since the shell depends on specific selectors documented in
 [`selectors.md`](selectors.md). The rounded listening
 window is drawn with a Win32 window region because Windows 10 has no native
