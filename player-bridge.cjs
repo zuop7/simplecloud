@@ -9,7 +9,7 @@ const controlSelectors = {
   shuffle: 'button.shuffleControl',
   repeat: 'button.repeatControl',
   like: 'button.playbackSoundBadge__like',
-  seek: '.playbackTimeline__progressBar'
+  seek: '.playbackTimeline__progressWrapper'
 };
 const routes = { home: '/discover', feed: '/feed', library: '/you/library', likes: '/you/likes' };
 const homeModules = [
@@ -108,6 +108,13 @@ function readVolume(root) {
   return Number.isFinite(volume) && volume >= 0 && volume <= 1 ? { volume, muted } : {};
 }
 
+function readProgress(root) {
+  const width = root.querySelector('.playbackTimeline__progressBar')?.style.width;
+  if (!width?.endsWith('%')) return {};
+  const progress = Number.parseFloat(width) / 100;
+  return progress >= 0 && progress <= 1 ? { progress } : {};
+}
+
 function readPlayer(root, baseUrl) {
   if (!root) return null;
   const query = selector => root.querySelector(selector);
@@ -131,6 +138,7 @@ function readPlayer(root, baseUrl) {
     artworkUrl: image ?? null,
     duration: readTime(query('.playbackTimeline__duration')),
     position: readTime(query('.playbackTimeline__timePassed')),
+    ...readProgress(root),
     isPlaying: playingState(query(controlSelectors.play)),
     shuffle: toggleState(query(controlSelectors.shuffle)),
     repeat: repeatState(query(controlSelectors.repeat)),
@@ -424,15 +432,19 @@ function runAction(name, value, report) {
   const link = root.querySelector('.playbackSoundBadge__titleLink');
   const track = trackLink(link?.getAttribute('href'), location.href);
   const rect = control.getBoundingClientRect();
-  if (track?.trackId !== value.trackId || rect.width <= 0) {
+  if (track?.trackId !== value.trackId || rect.width <= 0 || !Number.isFinite(value.ratio)
+    || value.ratio < 0 || value.ratio > 1) {
     report('The track changed or isn\'t seekable yet.');
     return;
   }
   const x = rect.left + rect.width * value.ratio;
-  for (const type of ['mousedown', 'mouseup', 'click']) {
-    control.dispatchEvent(new MouseEvent(type, {
+  // SoundCloud starts a document-level drag on the rail. Its painted fill is
+  // only as wide as the amount already played, and a click alone cannot seek.
+  for (const type of ['mousedown', 'mousemove', 'mouseup']) {
+    const target = type === 'mousemove' ? document : control;
+    target.dispatchEvent(new MouseEvent(type, {
       bubbles: true, cancelable: true, view: window, clientX: x, clientY: rect.top + rect.height / 2,
-      buttons: type === 'mousedown' ? 1 : 0
+      buttons: type === 'mouseup' ? 0 : 1
     }));
   }
 }
@@ -858,7 +870,7 @@ function fitListenFrame() {
     if (document.documentElement.classList.contains('sc-hide-comments')) {
       moveListenContentDown(legacy, legacy, legacy.querySelectorAll(legacyListenContent));
     } else legacy.style.removeProperty(listenContentOffset);
-    updateListenPreviewPosition(legacy.querySelector('.fullHero__waveform'));
+    fitListenPreviewProgress(legacy.querySelector('.fullHero__waveform'));
     return;
   }
   fittedFrame = frame;
@@ -880,7 +892,7 @@ function fitListenFrame() {
     scroller.classList.add('sc-listen-scroll');
     if (scroller.scrollTop) scroller.scrollTop = 0;
   }
-  updateListenPreviewPosition(slider);
+  fitListenPreviewProgress(slider);
 }
 
 function listeningPath(value) {
@@ -902,7 +914,7 @@ function findListenWaveform(doc, exact) {
   }
 }
 
-let sendListenPreviewAction, previewPosition, previewWaveform, previewMarker;
+let sendListenPreviewAction, previewPosition, previewWaveform, previewLayer;
 const previewDocuments = new WeakSet();
 const previewPlayButton = '.playButton, button[aria-label^="play" i], button[aria-label^="pause" i]';
 
@@ -923,49 +935,142 @@ function bindListenPreview(doc) {
     });
     observer.observe(doc, { childList: true, subtree: true });
   }
-  doc.defaultView.addEventListener('click', event => {
+  const intercept = event => {
     const hero = doc === fittedDoc ? fittedHero : legacyHero;
-    if (!hero?.contains(event.target)) return;
+    if (event.button !== 0 || !hero?.contains(event.target)) return;
+    const seeking = previewWaveform?.contains(event.target);
+    const playing = event.target.closest?.(previewPlayButton);
+    if (event.type !== 'click') {
+      // The native waveform can act on press, before we forward the click.
+      if (seeking || playing) event.stopImmediatePropagation();
+      return;
+    }
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (!event.isTrusted || event.button !== 0) return;
-    if (previewWaveform?.contains(event.target)) {
+    if (!event.isTrusted) return;
+    if (seeking) {
       const bounds = previewWaveform.getBoundingClientRect();
       if (bounds.width > 0) {
         const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
         sendListenPreviewAction('seek', listeningTrack, ratio);
       }
-    } else if (event.target.closest?.(previewPlayButton)) {
+    } else if (playing) {
       sendListenPreviewAction('play', listeningTrack);
     }
-  }, true);
+  };
+  for (const type of ['pointerdown', 'mousedown', 'click']) {
+    doc.defaultView.addEventListener(type, intercept, true);
+  }
 }
 
-function updateListenPreviewPosition(waveform = previewWaveform) {
+function setListenPreviewPosition({ trackId, position, duration, progress, isPlaying }) {
+  const ratio = duration > 0 && Number.isFinite(position)
+    ? Math.min(1, Math.max(0, progress ?? position / duration)) : NaN;
+  const previous = previewPosition;
+  if (previous && previous.trackId === trackId && previous.ratio === ratio && previous.isPlaying === isPlaying) return;
+  const now = performance.now();
+  const elapsed = now - (previous?.at ?? now);
+  const advance = (ratio - previous?.ratio) * duration;
+  // Interpolate confirmed advances only. Pause, buffering and seeks must not
+  // let the preview run ahead of the main player.
+  const steady = previous?.isPlaying && previous.trackId === trackId && isPlaying
+    && advance > 0 && advance <= 1.15 && elapsed < 1500;
+  previewPosition = { trackId, ratio, isPlaying, at: now, motion: steady ? Math.max(pollMs, elapsed) : 0 };
+  paintListenPreviewProgress();
+}
+
+function makeListenPreviewLayer(waveform, art, scene) {
+  const doc = waveform.ownerDocument;
+  const element = doc.createElement('div');
+  element.setAttribute('aria-hidden', 'true');
+  element.className = art ? 'sc-listen-preview-played' : 'sc-listen-preview-progress';
+  element.style.cssText = 'position:fixed;pointer-events:none;visibility:visible!important;z-index:3';
+  let copy;
+  if (art) {
+    copy = art.localName === 'canvas' ? doc.createElement('canvas') : art.cloneNode(true);
+    copy.removeAttribute('id');
+    copy.style.position = 'absolute';
+    if (art.localName === 'svg') {
+      copy.style.filter = 'brightness(0) saturate(100%) invert(39%) sepia(99%) saturate(2327%) hue-rotate(359deg) brightness(101%)';
+    }
+    element.append(copy);
+  } else {
+    element.style.cssText += ';width:1px;background:#fff';
+  }
+  if (scene && copy) {
+    // Put the played colour above the waveform and below the comment canvases.
+    element.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+    art.after(element);
+  } else {
+    doc.body.append(element);
+  }
+  return { element, art, copy, width: 0 };
+}
+
+function fitListenPreviewProgress(waveform) {
   if (!sendListenPreviewAction) return;
   if (waveform !== previewWaveform) {
-    previewMarker?.remove();
-    previewMarker = undefined;
+    previewLayer?.element.remove();
+    previewLayer = undefined;
     previewWaveform = waveform;
   }
-  const { trackId, position, duration } = previewPosition ?? {};
-  if (!waveform || trackId !== listeningTrack || !Number.isFinite(position) || !(duration > 0)) {
-    previewMarker?.remove();
-    previewMarker = undefined;
-    return;
+  if (!waveform) return;
+  const bounds = waveform.getBoundingClientRect();
+  const scene = waveform.querySelector('.waveform__scene');
+  // Crossfade renders the seek slider and waveform art in the same group.
+  // Ignore small SVGs such as controls and comment icons.
+  const art = scene
+    ? scene.querySelector('canvas.sceneLayer:not(.waveformCommentsNode)')
+    : [...waveform.parentElement.querySelectorAll('canvas, svg')].find(node => {
+      const rect = node.getBoundingClientRect();
+      return bounds.width > 0 && rect.width >= bounds.width * .9 && rect.height > 0;
+    });
+  if (!previewLayer?.element.isConnected || previewLayer.art !== art) {
+    previewLayer?.element.remove();
+    previewLayer = makeListenPreviewLayer(waveform, art, scene);
   }
-  if (!previewMarker) {
-    previewMarker = waveform.ownerDocument.createElement('div');
-    previewMarker.setAttribute('aria-hidden', 'true');
-    previewMarker.className = 'sc-listen-preview-progress';
-    previewMarker.style.cssText = 'position:fixed;pointer-events:none;visibility:visible!important;width:1px;background:#fff;z-index:3';
-    waveform.ownerDocument.body.append(previewMarker);
+  const { element, copy } = previewLayer;
+  const artBounds = art?.getBoundingClientRect() ?? bounds;
+  if (!scene || !art) {
+    element.style.left = `${bounds.left}px`;
+    element.style.top = `${artBounds.top}px`;
+    element.style.height = `${artBounds.height}px`;
+    if (art) element.style.width = `${bounds.width}px`;
   }
-  const { left, top, width, height } = waveform.getBoundingClientRect();
-  const ratio = Math.min(1, Math.max(0, position / duration));
-  previewMarker.style.left = `${left + width * ratio}px`;
-  previewMarker.style.top = `${top}px`;
-  previewMarker.style.height = `${height}px`;
+  if (copy) {
+    copy.style.left = `${scene ? 0 : artBounds.left - bounds.left}px`;
+    copy.style.top = '0';
+    copy.style.width = `${artBounds.width}px`;
+    copy.style.height = `${artBounds.height}px`;
+    if (art.localName === 'canvas' && art.width && art.height) {
+      if (copy.width !== art.width) copy.width = art.width;
+      if (copy.height !== art.height) copy.height = art.height;
+      const ctx = copy.getContext('2d');
+      ctx.globalCompositeOperation = 'copy';
+      ctx.drawImage(art, 0, 0);
+      ctx.globalCompositeOperation = 'source-in';
+      ctx.fillStyle = '#f50';
+      ctx.fillRect(0, 0, copy.width, copy.height);
+    }
+  }
+  previewLayer.width = bounds.width;
+  paintListenPreviewProgress();
+}
+
+function paintListenPreviewProgress() {
+  if (!previewLayer) return;
+  const { element, copy, width } = previewLayer;
+  const { trackId, ratio, motion } = previewPosition ?? {};
+  element.hidden = trackId !== listeningTrack || !Number.isFinite(ratio);
+  if (element.hidden) return;
+  const duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : motion;
+  if (copy) {
+    element.style.transition = duration ? `clip-path ${duration}ms linear` : 'none';
+    element.style.clipPath = `inset(0 ${(1 - ratio) * 100}% 0 0)`;
+  } else {
+    element.style.transition = duration ? `transform ${duration}ms linear` : 'none';
+    element.style.transform = `translateX(${width * ratio}px)`;
+  }
 }
 
 const dragDocuments = new WeakSet();
@@ -1004,8 +1109,8 @@ function bindListenDrag(doc) {
 }
 
 function unfitListenFrame() {
-  previewMarker?.remove();
-  previewMarker = previewWaveform = undefined;
+  previewLayer?.element.remove();
+  previewLayer = previewWaveform = undefined;
   legacyHero?.classList.remove('sc-listen-legacy');
   legacyHero?.style.removeProperty(listenContentOffset);
   fittedFrame?.classList.remove('sc-listen-frame');
@@ -1052,8 +1157,7 @@ if (process.type === 'renderer') {
     ipcRenderer.on('simplecloud:site-action', (_event, name, value) => {
       if (preview) {
         if (name === 'listenPreviewPosition') {
-          previewPosition = value;
-          updateListenPreviewPosition();
+          setListenPreviewPosition(value);
           return;
         }
         if (name !== 'listenMode' && name !== 'hideComments') return;

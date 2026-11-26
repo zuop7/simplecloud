@@ -54,6 +54,9 @@ corner and close just the companion window. Hover the
 bottom edge or press `F6` to reveal the player bar with **Always on top** and
 **Keep player bar visible**. Use the latter to leave the bar on when the pointer moves away.
 **Next up** grows the window downward, and the waveform follows the current track.
+While a track plays, the waveform tints the played part orange and moves forward
+smoothly; pausing stops it in place. Seeking in either window uses the whole
+timeline, not only the part already played.
 
 **A quieter Home.** Only three blocks survive: your personalized shelf (Daily
 Drops and Weekly Wave), *More of what you like*, and *Mixed for you*. The Likes

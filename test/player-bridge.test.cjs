@@ -77,13 +77,14 @@ test('reads a scoped, signed-in player snapshot without requiring a track route'
       'button.shuffleControl': element({ classes: ['disabled'], attrs: { 'aria-pressed': 'false' } }),
       'button.repeatControl': element({ attrs: { 'aria-pressed': 'true' } }),
       'button.playbackSoundBadge__like': element({ classes: ['sc-button-selected'] }),
-      '.playbackTimeline__progressBar': element()
+      '.playbackTimeline__progressWrapper': element(),
+      '.playbackTimeline__progressBar': element({ style: { width: '2.75%' } })
     })[selector]
   };
   assert.deepEqual(readPlayer(root, base), {
     status: 'track', trackId: '/artist/track', trackUrl: 'https://soundcloud.com/artist/track',
     title: 'Track', artist: 'Artist', artworkUrl: 'https://example.com/art.jpg',
-    duration: 118, position: 3, isPlaying: true, shuffle: false, repeat: 'all', liked: true,
+    duration: 118, position: 3, progress: .0275, isPlaying: true, shuffle: false, repeat: 'all', liked: true,
     queue: [{
       trackId: '/artist/next', trackUrl: 'https://soundcloud.com/artist/next',
       title: 'Next track', artist: 'Other', duration: 60
@@ -92,6 +93,9 @@ test('reads a scoped, signed-in player snapshot without requiring a track route'
   });
   assert.deepEqual(readPlayer({ querySelector: () => null, querySelectorAll: () => [] }, base),
     { status: 'idle', queue: [] });
+  const query = root.querySelector;
+  root.querySelector = selector => selector.endsWith('__progressWrapper') ? null : query(selector);
+  assert.equal(readPlayer(root, base).controls.seek, false, 'the painted fill is not a seek rail');
 });
 
 test('publishes coherent track changes, queue edits and deduplicates snapshots', () => {

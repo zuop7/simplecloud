@@ -25,7 +25,7 @@ const listenMessage = text => `data:text/html;charset=utf-8,${encodeURIComponent
   `<title>SimpleCloud — Listening</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#202124;color:#bdbfc3;font:14px "Segoe UI",sans-serif}</style><body role="status">${text}</body>`
 )}`;
 const idleListenUrl = listenMessage('Play a track to see its waveform');
-const appIcon = path.join(__dirname, 'assets', 'cloud.png');
+const appIcon = path.join(__dirname, 'assets', 'cloud.ico');
 const siteChrome = fs.readFileSync(path.join(__dirname, 'site-chrome.css'), 'utf8');
 const shellBackground = '#202124'; // Matches --bg in shell.css.
 const headerHeight = 52;
@@ -421,7 +421,8 @@ function openShell() {
   const broadcastListenPosition = () => {
     if (!previewReady || state?.status !== 'track') return;
     listenSite.send('simplecloud:site-action', 'listenPreviewPosition', {
-      trackId: state.trackId, position: state.position, duration: state.duration
+      trackId: state.trackId, position: state.position, duration: state.duration,
+      progress: state.progress, isPlaying: state.isPlaying
     });
   };
   const syncListenSkin = () => {
@@ -506,6 +507,8 @@ function openShell() {
     );
     listeningPositioned = true;
     listeningOpen = true;
+    // The companion still needs the main player's clock when its window is minimized.
+    site.setBackgroundThrottling(false);
     listenHover = listenDockHover = false;
     listenFocus = undefined;
     hoverChangedAt = undefined;
@@ -527,6 +530,7 @@ function openShell() {
     dragOrigin = undefined;
     clearInterval(hoverTimer);
     listeningOpen = false;
+    site.setBackgroundThrottling(true);
     listenVolumePopup.hide();
     previewUrl = undefined;
     previewReady = false;
@@ -882,7 +886,9 @@ function openShell() {
       frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:400px;height:260px';
       frame.srcdoc = '<main><section id="hero"><div><div style="display:flex">'
         + '<div id="column" style="display:flex;flex:1;flex-direction:column;justify-content:space-between;height:240px">'
-          + '<div id="hero-title"><h2>Track</h2></div><div id="wave" style="height:100px"><div class="MuiSlider-root" style="height:100%"></div></div>'
+           + '<div id="hero-title"><h2>Track</h2></div><div id="wave" style="height:100px"><div class="MuiSlider-root" style="height:100%">'
+           + '<svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M5 20v60m15-70v80m15-60v40m15-50v60m15-70v80m15-60v40m15-50v60" stroke="white" stroke-width="3"/></svg>'
+           + '</div></div>'
          + '<div id="hero-actions"><button>Write a comment</button></div></div><div id="hero-artwork">Artwork</div>'
         + '</div></div></section><section id="discussion">Comments</section></main>';
       return new Promise(resolve => {
@@ -987,7 +993,7 @@ function openShell() {
     if (!placeholderOnly) throw new Error('Listening mode exposed Home or fitted a non-track iframe.');
     const previousState = state;
     await listenSite.executeJavaScript(`history.replaceState(history.state, '', '/n/simplecloud-probe/listening/')`);
-    state = { ...state, status: 'track', trackId: '/simplecloud-probe/listening', title: 'Track', position: 35, duration: 100 };
+    state = { ...state, status: 'track', trackId: '/simplecloud-probe/listening', title: 'Track', position: 35, duration: 100, progress: .356 };
     syncListenSkin();
     const heroDeadline = Date.now() + 1500;
     while (!await listenSite.executeJavaScript(`Boolean(document.querySelector('#simplecloud-listening-fixture.sc-listen-frame'))`)
@@ -997,16 +1003,15 @@ function openShell() {
     const heroFrame = await listenSite.executeJavaScript(`(() => {
       const frame = document.getElementById('simplecloud-listening-fixture');
       const doc = frame.contentDocument;
-      const marker = doc.querySelector('.sc-listen-preview-progress');
-      const wave = doc.querySelector('.MuiSlider-root').getBoundingClientRect();
+      const played = doc.querySelector('.sc-listen-preview-played');
       return {
         fitted: frame.classList.contains('sc-listen-frame'),
         style: Boolean(doc.getElementById('sc-listen-frame')),
-        playhead: marker && Math.abs(marker.getBoundingClientRect().left - wave.left - wave.width * .35) < 1,
+        played: Boolean(played?.querySelector('svg')) && played.style.clipPath === 'inset(0px 64.4% 0px 0px)',
         homeHidden: getComputedStyle(document.getElementById('simplecloud-home-slider-fixture')).visibility === 'hidden'
       };
     })()`);
-    if (!heroFrame.fitted || !heroFrame.style || !heroFrame.playhead || !heroFrame.homeHidden) {
+    if (!heroFrame.fitted || !heroFrame.style || !heroFrame.played || !heroFrame.homeHidden) {
       throw new Error(`The crossfade hero frame was not fitted: ${JSON.stringify(heroFrame)}`);
     }
     await checkHeroActions(true);
@@ -1251,6 +1256,55 @@ function openShell() {
     console.log('[probe] Volume and mute follow the native SoundCloud player.');
   }
 
+  async function checkSeek() {
+    const trackId = '/simplecloud-probe/seek';
+    await site.executeJavaScript(`(() => {
+      const fixture = document.createElement('div');
+      fixture.id = 'simplecloud-seek-fixture';
+      fixture.className = 'playControls';
+      fixture.innerHTML = '<div class="playControls__inner" role="contentinfo">'
+        + '<a class="playbackSoundBadge__titleLink" href="${trackId}" title="Seek test"></a>'
+        + '<a class="playbackSoundBadge__lightLink">Probe</a>'
+        + '<span class="playbackTimeline__duration">2:00</span><span class="playbackTimeline__timePassed">0:00</span>'
+        + '<div class="playbackTimeline__progressWrapper" style="width:300px;height:24px">'
+        + '<div class="playbackTimeline__progressBar" style="width:0%"></div></div></div>';
+      const rail = fixture.querySelector('.playbackTimeline__progressWrapper');
+      fixture.addEventListener('mousedown', event => {
+        if (event.target !== rail || event.buttons !== 1) return;
+        let ratio;
+        document.addEventListener('mousemove', event => {
+          const box = rail.getBoundingClientRect();
+          ratio = (event.clientX - box.left) / box.width;
+        }, { once: true });
+        document.addEventListener('mouseup', () => { fixture.dataset.ratio = ratio; }, { once: true });
+      });
+      document.body.prepend(fixture);
+    })()`);
+    const waitFor = async (condition, message) => {
+      const deadline = Date.now() + 3300;
+      while (!await condition()) {
+        if (Date.now() >= deadline) throw new Error(message);
+        await new Promise(resolve => setTimeout(resolve, 30));
+      }
+    };
+    try {
+      await waitFor(() => state?.trackId === trackId && shell.executeJavaScript(`!document.getElementById('seek').disabled`),
+        'The shell did not enable the seek control for the test track.');
+      await shell.executeJavaScript(`(() => {
+        const seek = document.getElementById('seek');
+        seek.value = 87;
+        seek.dispatchEvent(new Event('input'));
+        seek.dispatchEvent(new Event('change'));
+      })()`);
+      await waitFor(() => site.executeJavaScript(`Math.abs(Number(document.getElementById('simplecloud-seek-fixture').dataset.ratio) - .725) < .004`),
+        'The shell seek did not reach the full SoundCloud rail.');
+    } finally {
+      await site.executeJavaScript(`document.getElementById('simplecloud-seek-fixture').remove()`);
+    }
+    await waitFor(() => state?.trackId !== trackId, 'The seek test track was not cleared.');
+    console.log('[probe] Seek moves along the full rail even when its filled segment is at zero.');
+  }
+
   async function checkProbe() {
     if (!probe || probing || !readyShells.has(shell) || !readyShells.has(listenShell) || !state) return;
     probing = true;
@@ -1317,6 +1371,7 @@ function openShell() {
       }
       console.log('[probe] Waveform comment markers and popovers hide and restore; regular comments and seeking stay visible.');
       await checkVolumePopup();
+      await checkSeek();
       const slot = await shell.executeJavaScript(`(() => {
         const box = document.querySelector('.site-slot').getBoundingClientRect();
         return { top: box.top, bottom: innerHeight - box.bottom, width: box.width, loaded: !!window.simpleCloud };
