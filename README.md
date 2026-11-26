@@ -19,7 +19,8 @@ does in a browser.
 
 <img width="1209" height="335" alt="listen mode" src="https://github.com/user-attachments/assets/9c2758b6-cd0c-4acd-ba29-f2b0ad12d433" />
 
-<img width="1224" height="848" alt="main window" src="https://github.com/user-attachments/assets/6e9f0491-b24d-467f-a23d-5c2560699df6" />
+<img width="1224" height="848" alt="main window" src="https://github.com/user-attachments/assets/13b93385-d42e-4e3f-9224-455ee2944bb9" />
+
 
 
 
