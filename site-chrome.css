@@ -56,6 +56,9 @@ html.sc-listen .sc-listen-legacy {
   border-radius: 0 !important;
   user-select: none;
 }
+html.sc-listen.sc-hide-comments .sc-listen-legacy :is(.fullHero__title, .fullHero__info, .fullHero__waveform) {
+  translate: 0 var(--sc-listen-content-offset, 0px) !important;
+}
 html.sc-listen .sc-listen-placeholder {
   position: fixed;
   inset: 0;

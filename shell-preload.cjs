@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('simpleCloud', {
   onHistory: callback => { ipcRenderer.on('simplecloud:search-history', (_event, entries) => callback(entries)); },
   onFocusSearch: callback => { ipcRenderer.on('simplecloud:focus-search', () => callback()); },
   onFocusPlayer: callback => { ipcRenderer.on('simplecloud:focus-player', () => callback()); },
+  onFocusListenDock: callback => { ipcRenderer.on('simplecloud:focus-listen-dock', () => callback()); },
   onBlurSearch: callback => { ipcRenderer.on('simplecloud:blur-search', () => callback()); },
   onError: callback => { ipcRenderer.on('simplecloud:shell-error', (_event, error) => callback(error)); },
   onVolume: callback => { ipcRenderer.on('simplecloud:volume-state', (_event, level) => callback(level)); },

@@ -19,8 +19,8 @@
   "build": {
     "appId": "com.simplecloud.desktop",
     "productName": "SimpleCloud",
-    "artifactName": "${productName}-${version}-${arch}.exe",
-    "files": ["*.cjs", "*.css", "*.html", "shell.js", "volume-popup.js", "assets/cloud.png"],
+    "artifactName": "${productName}-v.${version}-${arch}.exe",
+    "files": ["*.cjs", "*.css", "*.html", "shell.js", "volume-popup.js", "listen-dock.js", "assets/cloud.png"],
     "asarUnpack": ["**/*.node"],
     "npmRebuild": false,
     "win": {

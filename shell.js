@@ -17,7 +17,6 @@ cover.hidden = true;
 document.querySelector('.cover').append(cover);
 const pin = byId('pin');
 const modeButton = byId('mode');
-const barPin = byId('bar-pin');
 const playerBar = document.querySelector('.player');
 const queuePanel = document.querySelector('.queue');
 const queueList = byId('queue-list');
@@ -56,17 +55,16 @@ function renderVolume(state) {
   mute.querySelector('use').setAttribute('href', muted ? '#i-muted' : '#i-volume');
 }
 
-function render({ state, route, pinned, mode, keepListenBar }) {
+function render({ state, route, pinned, mode, keepListenBar, queueOpen: showQueue }) {
   const next = state?.status === 'track' ? state : null;
   if (player?.trackId !== next?.trackId) drag = pending = undefined;
   player = next;
   if (pending && Math.abs(player.position - pending.position) <= 2) pending = undefined;
   for (const button of playerButtons) {
     const action = button.dataset.action;
-    if (action === 'queue' || action === 'pin' || action === 'mode' || action === 'keepBar') button.disabled = false;
+    if (action === 'queue' || action === 'pin' || action === 'keepBar') button.disabled = false;
     else button.disabled = !player?.controls?.[action];
-    if (action === 'queue') button.setAttribute('aria-expanded', String(queueOpen));
-    else if (action === 'pin') button.setAttribute('aria-pressed', String(pinned));
+    if (action === 'pin') button.setAttribute('aria-pressed', String(pinned));
     else if (action === 'keepBar') button.setAttribute('aria-pressed', String(keepListenBar));
     else if (action === 'repeat') button.setAttribute('aria-pressed', String(['one', 'all'].includes(player?.repeat)));
     else if (button.hasAttribute('aria-pressed')) {
@@ -99,9 +97,9 @@ function render({ state, route, pinned, mode, keepListenBar }) {
     else button.removeAttribute('aria-current');
   }
   pin.setAttribute('aria-pressed', String(pinned));
-  barPin.setAttribute('aria-pressed', String(pinned));
   applyMode(mode);
   queueItems = state?.queue ?? [];
+  if (queueOpen !== showQueue) setQueue(showQueue);
   renderQueue(queueItems);
   updateSeek();
   renderVolume(state);
@@ -112,10 +110,6 @@ function applyMode(value) {
   if (next === listening) return;
   listening = next;
   document.body.classList.toggle('listen', next);
-}
-
-function switchMode() {
-  bridge.action('mode');
 }
 
 function totalTime(queue) {  const sum = queue.reduce((total, item) => total + (Number.isFinite(item.duration) ? item.duration : 0), 0);
@@ -305,24 +299,21 @@ function setQueue(open) {
   queuePanel.hidden = !open;
   document.body.classList.toggle('queue-open', open);
   queueButton.setAttribute('aria-expanded', String(open));
-  bridge?.action('queuePanel', open);
-  renderQueue(queueItems);
 }
 
 for (const button of nav) button.addEventListener('click', () => bridge.action('navigate', button.dataset.route));
 for (const button of playerButtons) {
   button.addEventListener('click', () => {
     const action = button.dataset.action;
-    if (action === 'queue') setQueue(!queueOpen);
-    else if (action === 'mode') switchMode();
+    if (action === 'queue') bridge.action('queuePanel');
     else bridge.action(action);
   });
 }
-modeButton.addEventListener('click', switchMode);
+modeButton.addEventListener('click', () => bridge.action('mode'));
 for (const button of document.querySelectorAll('[data-window]')) {
   button.addEventListener('click', () => bridge.action(button.dataset.window));
 }
-byId('queue-close').addEventListener('click', () => setQueue(false));
+byId('queue-close').addEventListener('click', () => bridge.action('queuePanel', false));
 byId('queue-clear').addEventListener('click', () => bridge.action('queueClear'));
 queueList.addEventListener('click', event => {
   const row = event.target.closest('li');
@@ -331,7 +322,7 @@ queueList.addEventListener('click', event => {
   else bridge.action('queueJump', { trackId: row.dataset.trackId });
 });
 queuePanel.addEventListener('keydown', event => {
-  if (event.key === 'Escape') { setQueue(false); queueButton.focus(); return; }
+  if (event.key === 'Escape') { bridge.action('queuePanel', false); queueButton.focus(); return; }
   const row = event.target.closest('li');
   if (!row) return;
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -434,7 +425,7 @@ if (bridge) {
     openHistory();
   });
   bridge.onFocusPlayer(() => {
-    playerBar.querySelector('.play:not(:disabled), [data-action="mode"]').focus();
+    playerBar.querySelector('.play:not(:disabled), [data-action="keepBar"]').focus();
   });
   bridge.onBlurSearch(closeHistory);
   bridge.onVolumeOpened(() => mute.setAttribute('aria-expanded', 'true'));

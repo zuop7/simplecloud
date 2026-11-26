@@ -46,11 +46,12 @@ speaker for a vertical volume slider, or click it to mute. With the speaker
 focused, press `↑` to open the slider and `Esc` to close it. Both controls act
 on SoundCloud's own level. Use **Next up** for the queue.
 
-**Listening mode** (`Ctrl+Shift+L`). The headphones button detaches the live
-player into a 1180×300 window without reloading SoundCloud. Click **Back to
-browser** (the window icon) or close the compact window to dock it. Hover the
-bottom edge or press `F6` to reveal the player bar over the waveform. Use
-**Keep player bar visible** to leave it on even when the pointer moves away.
+**Listening mode** (`Ctrl+Shift+L`). The headphones button opens a 1180×300
+companion window while the main window stays usable. Both control the same live
+SoundCloud player. Hover over the waveform to reveal the **×** in the top-right
+corner and close just the companion window. Hover the
+bottom edge or press `F6` to reveal the player bar with **Always on top** and
+**Keep player bar visible**. Use the latter to leave the bar on when the pointer moves away.
 **Next up** grows the window downward, and the waveform follows the current track.
 
 **A quieter Home.** Only three blocks survive: your personalized shelf (Daily
@@ -71,8 +72,9 @@ it, and the narrowed layout gains no horizontal scrollbar.
 
 **Hide waveform comments** (Settings, off by default). Removes the avatar markers
 and their pop-ups from the waveform without reloading or blocking requests. In
-listening mode it also hides the hero's comment and action row and recenters the
-waveform. The comment thread, composer and count stay visible in browser mode.
+Listening mode the track details and waveform move down together into the extra
+space. The newer track layout also hides the row below the waveform. The comment
+thread, composer and count stay visible in browser mode.
 
 **Network filtering** (Settings → Network filtering, off by default). Opt-in
 blocking of ads and trackers using EasyList and EasyPrivacy. The lists are
@@ -90,11 +92,13 @@ site in the same local session to confirm whether the skin is at fault.
 | Key | Action |
 |---|---|
 | `Ctrl+Shift+L` | Toggle listening mode |
-| `Ctrl+F` | Search (also returns to browser mode) |
-| `F6` / `Esc` | Show / hide and focus the listening bar |
+| `Ctrl+F` | Search in the main window |
+| `F6` | Show and focus the listening bar |
+| `Shift+F6` | Show and focus the listening window’s close button |
+| `Esc` | Dismiss keyboard-revealed controls and return focus to the waveform |
 | `Ctrl+Shift+D` | Diagnostics |
 | `Alt` | Application menu |
-| `Alt+F4` | Dock listening mode or close the app in browser mode |
+| `Alt+F4` | Close the focused window |
 
 ## Privacy
 
@@ -126,14 +130,14 @@ The portable executable is built with:
 npm run build:win
 ```
 
-Output: `dist/SimpleCloud-<version>-x64.exe`. `npm test` runs the parser and
+Output: `dist/SimpleCloud-v.<version>-x64.exe`. `npm test` runs the parser and
 store tests against fixtures; `npm run probe` drives an isolated Electron profile
 through the shell, the queue drawer, search, the Home filter and both window
 modes.
 
 ## Status
 
-`0.2.0` development build. Expect breakage when SoundCloud
+Current version: `0.2.0`. Expect breakage when SoundCloud
 changes its markup, since the shell depends on specific selectors documented in
 [`selectors.md`](selectors.md). The rounded listening
 window is drawn with a Win32 window region because Windows 10 has no native

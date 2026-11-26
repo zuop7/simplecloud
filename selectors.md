@@ -63,11 +63,11 @@ For milestone 1, resolve the active track from the **playing bar**, not the curr
 
 ## Listening mode
 
-- The site view ends 60 px above the window bottom; the strip is shell chrome and never overlays the page. Hover is detected on the strip with `pointerenter`/`pointerleave`; there is no pointer signal from inside the site.
-- SoundCloud's own bar is `.playControls`. It stays mounted for the bridge but is `display: none`. Hiding `.playControls__inner` with `visibility` is not enough: SoundCloud sets `visibility: visible` back on the bar's controls, which left a second bar painting under the app's own on every page.
-- `html.sc-listen` (set by the bridge on mode entry) hides `header[role="banner"]` and the footer so the hero starts at the top; the bridge scrolls the page to the top once.
+- The main SoundCloud view stays mounted in the browser window. The separate Listening preview is covered at the bottom by a 48 px player only while hovered, pinned, or keyboard-revealed.
+- SoundCloud's own bar is `.playControls`. It stays mounted, invisible and pointer-disabled, so the bridge can still measure its seek rail and operate its controls.
+- `html.sc-listen` hides the preview's navigation, footer, and non-hero content. The main page does not receive this class.
 - Newer accounts get the song hero from SoundCloud's crossfade player: a same-origin `iframe.webiIframe` whose src is `soundcloud.com/n/<artist>/<track>?…embedded=crossfade…`. In listening mode the bridge marks it `sc-listen-frame`, pins it to the view and injects a style into the frame: `main` flexes to the full frame height, the first `section` (the hero) is `100vh` with `padding-block: 2vh`, the artwork square (`section > div > div > :last-child`) shrinks to the frame height, and the frame's scroll container (the body div holding `main`) gets `.sc-listen-scroll` with `overflow: hidden`. That is what stops the hero clipping and the frame's footer scrollbar.
-- Follow-player sends `openUrl` on mode entry and on each track change while listening; the 3.5 s scripted-navigation guard stops duplicate sends. The strip's progress line mirrors the site position; the hero waveform also seeks.
+- The companion preview loads the current track when opened and follows track changes. The preview cannot play media; its play/seek gestures are forwarded to the main player, and a playhead on the preview mirrors the main player's position.
 - The 200 px listening queue is grown downward with the window, so the site view keeps its height.
 
 ## Remaining checks

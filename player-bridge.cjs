@@ -749,73 +749,67 @@ const listenFrameCss = `
   main .sc-listen-hero > div { height: 100% !important; min-height: 0 !important; }
   main .sc-listen-hero > div > div > :last-child { width: auto !important; height: 100% !important; }
   .sc-listen-hero-footer { display: none !important; }
-  .sc-listen-waveform-column {
+  .sc-listen-track-content {
     display: grid !important;
-    grid-template: minmax(min-content, 1fr) auto minmax(0, 1fr) / minmax(0, 1fr) !important;
-    align-content: stretch !important;
-  }
-  .sc-listen-centered-waveform {
-    grid-row: 2 !important;
-    position: relative !important;
-    top: var(--sc-listen-waveform-offset, 0px) !important;
+    grid-template: none / minmax(0, 1fr) !important;
+    grid-auto-rows: max-content !important;
+    align-content: start !important;
+    row-gap: 12px !important;
+    translate: 0 var(--sc-listen-content-offset, 0px) !important;
   }
   ::-webkit-scrollbar { width: 0 !important; height: 0 !important; }
 `;
 
 const listenWaveform = 'main section :is(.MuiSlider-root, div[role="slider"][aria-valuenow])';
 const trackHeading = 'h1, h2, [role="heading"]:is([aria-level="1"], [aria-level="2"])';
-const waveformOffset = '--sc-listen-waveform-offset';
+const listenContentOffset = '--sc-listen-content-offset';
+const listenContentLift = 8;
+const legacyListenContent = '.fullHero__title, .fullHero__info, .fullHero__waveform';
 let listenPlaceholder, fittedFrame, fittedDoc, fittedHero, legacyHero;
 
-function updateListenHeroFooter(doc, slider) {
-  let hero, waveform, footer, titleRow;
+function updateListenHeroLayout(doc, slider) {
+  let hero, column, footer;
   if (slider && document.documentElement.classList.contains('sc-hide-comments')) {
     hero = slider.closest('section');
-    const title = 'h1, [role="heading"][aria-level="1"]';
     // The left column contains the title, waveform and action row as siblings.
     // Require the title before the waveform so we never mistake artwork or
     // the separate discussion below the hero for the action row.
     for (let branch = slider.parentElement; branch && branch !== hero; branch = branch.parentElement) {
-      const last = branch.nextElementSibling;
-      if (!last || last.nextElementSibling || !last.querySelector('button, textarea, input, [role="button"]')) continue;
       const siblings = [...branch.parentElement.children];
-      titleRow = siblings.slice(0, siblings.indexOf(branch))
-        .find(element => element.matches(title) || element.querySelector(title));
-      if (!titleRow) continue;
-      waveform = branch;
-      footer = last;
+      const hasTitle = siblings.slice(0, siblings.indexOf(branch))
+        .some(element => element.matches(trackHeading) || element.querySelector(trackHeading));
+      if (!hasTitle) continue;
+      column = branch.parentElement;
+      const last = branch.nextElementSibling;
+      if (last && !last.nextElementSibling && last.querySelector('button, textarea, input, [role="button"]')) footer = last;
       break;
     }
   }
-  for (const [className, element] of [
-    ['sc-listen-hero-footer', footer],
-    ['sc-listen-waveform-column', waveform?.parentElement],
-    ['sc-listen-centered-waveform', waveform]
-  ]) {
+  for (const [className, element] of [['sc-listen-hero-footer', footer], ['sc-listen-track-content', column]]) {
     for (const old of doc.querySelectorAll(`.${className}`)) {
       if (old === element) continue;
       old.classList.remove(className);
-      if (className === 'sc-listen-centered-waveform') old.style.removeProperty(waveformOffset);
+      if (className === 'sc-listen-track-content') old.style.removeProperty(listenContentOffset);
     }
     element?.classList.add(className);
   }
-  if (!waveform) return;
+  if (column) moveListenContentDown(hero, column, column.children);
+}
+
+function moveListenContentDown(hero, offsetOwner, elements) {
+  const boxes = Array.from(elements, element => element.getBoundingClientRect()).filter(box => box.height > 0);
+  if (!boxes.length) return;
   const bounds = hero.getBoundingClientRect();
-  const wave = waveform.getBoundingClientRect();
-  const oldOffset = waveform.style.getPropertyValue(waveformOffset);
-  const naturalTop = wave.top - (Number.parseFloat(oldOffset) || 0);
-  const minTop = titleRow.getBoundingClientRect().bottom + 4;
-  const maxTop = bounds.bottom - wave.height;
-  // Size the grid as before, but align the wave against the hero, not a
-  // potentially shorter title/waveform column. In tight windows avoid the title.
-  let offset = 0;
-  if (wave.height > 0 && maxTop >= minTop) {
-    const centeredTop = bounds.top + (bounds.height - wave.height) / 2;
-    const top = Math.min(maxTop, Math.max(minTop, centeredTop));
-    offset = Math.round((top - naturalTop) * 4) / 4;
-  }
-  const value = `${offset}px`;
-  if (oldOffset !== value) waveform.style.setProperty(waveformOffset, value);
+  const previous = offsetOwner.style.getPropertyValue(listenContentOffset);
+  const oldOffset = Number.parseFloat(previous) || 0;
+  const top = Math.min(...boxes.map(box => box.top)) - oldOffset;
+  const bottom = Math.max(...boxes.map(box => box.bottom)) - oldOffset;
+  const spaceAbove = top - bounds.top;
+  const spaceBelow = bounds.bottom - bottom;
+  // Leave a little more breathing room below the group for the overlay player.
+  const offset = Math.max(0, Math.min(spaceBelow, (spaceBelow - spaceAbove) / 2 - listenContentLift));
+  const value = `${Math.round(offset * 4) / 4}px`;
+  if (previous !== value) offsetOwner.style.setProperty(listenContentOffset, value);
 }
 
 function fitListenFrame() {
@@ -861,6 +855,10 @@ function fitListenFrame() {
   if (legacy) {
     legacyHero = legacy;
     legacy.classList.add('sc-listen-legacy');
+    if (document.documentElement.classList.contains('sc-hide-comments')) {
+      moveListenContentDown(legacy, legacy, legacy.querySelectorAll(legacyListenContent));
+    } else legacy.style.removeProperty(listenContentOffset);
+    updateListenPreviewPosition(legacy.querySelector('.fullHero__waveform'));
     return;
   }
   fittedFrame = frame;
@@ -869,18 +867,20 @@ function fitListenFrame() {
   hero.classList.add('sc-listen-hero');
   frame.classList.add('sc-listen-frame');
   bindListenDrag(doc);
+  bindListenPreview(doc);
   if (!doc.getElementById('sc-listen-frame')) {
     const style = doc.createElement('style');
     style.id = 'sc-listen-frame';
     style.textContent = listenFrameCss;
     (doc.head ?? doc.documentElement).append(style);
   }
-  updateListenHeroFooter(doc, slider);
+  updateListenHeroLayout(doc, slider);
   const scroller = [...doc.querySelectorAll('body > div')].find(element => element.querySelector('main'));
   if (scroller) {
     scroller.classList.add('sc-listen-scroll');
     if (scroller.scrollTop) scroller.scrollTop = 0;
   }
+  updateListenPreviewPosition(slider);
 }
 
 function listeningPath(value) {
@@ -900,6 +900,72 @@ function findListenWaveform(doc, exact) {
     const headings = waveform.closest('section')?.querySelectorAll(trackHeading) ?? [];
     if (listeningTitle && [...headings].some(heading => normalise(heading.textContent) === listeningTitle)) return waveform;
   }
+}
+
+let sendListenPreviewAction, previewPosition, previewWaveform, previewMarker;
+const previewDocuments = new WeakSet();
+const previewPlayButton = '.playButton, button[aria-label^="play" i], button[aria-label^="pause" i]';
+
+function bindListenPreview(doc) {
+  if (!sendListenPreviewAction || previewDocuments.has(doc)) return;
+  previewDocuments.add(doc);
+  const restrictMedia = () => {
+    if (!doc.head) return false;
+    const policy = doc.createElement('meta');
+    policy.httpEquiv = 'Content-Security-Policy';
+    policy.content = "media-src 'none'";
+    doc.head.prepend(policy);
+    return true;
+  };
+  if (!restrictMedia()) {
+    const observer = new MutationObserver(() => {
+      if (restrictMedia()) observer.disconnect();
+    });
+    observer.observe(doc, { childList: true, subtree: true });
+  }
+  doc.defaultView.addEventListener('click', event => {
+    const hero = doc === fittedDoc ? fittedHero : legacyHero;
+    if (!hero?.contains(event.target)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (!event.isTrusted || event.button !== 0) return;
+    if (previewWaveform?.contains(event.target)) {
+      const bounds = previewWaveform.getBoundingClientRect();
+      if (bounds.width > 0) {
+        const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
+        sendListenPreviewAction('seek', listeningTrack, ratio);
+      }
+    } else if (event.target.closest?.(previewPlayButton)) {
+      sendListenPreviewAction('play', listeningTrack);
+    }
+  }, true);
+}
+
+function updateListenPreviewPosition(waveform = previewWaveform) {
+  if (!sendListenPreviewAction) return;
+  if (waveform !== previewWaveform) {
+    previewMarker?.remove();
+    previewMarker = undefined;
+    previewWaveform = waveform;
+  }
+  const { trackId, position, duration } = previewPosition ?? {};
+  if (!waveform || trackId !== listeningTrack || !Number.isFinite(position) || !(duration > 0)) {
+    previewMarker?.remove();
+    previewMarker = undefined;
+    return;
+  }
+  if (!previewMarker) {
+    previewMarker = waveform.ownerDocument.createElement('div');
+    previewMarker.setAttribute('aria-hidden', 'true');
+    previewMarker.className = 'sc-listen-preview-progress';
+    previewMarker.style.cssText = 'position:fixed;pointer-events:none;visibility:visible!important;width:1px;background:#fff;z-index:3';
+    waveform.ownerDocument.body.append(previewMarker);
+  }
+  const { left, top, width, height } = waveform.getBoundingClientRect();
+  const ratio = Math.min(1, Math.max(0, position / duration));
+  previewMarker.style.left = `${left + width * ratio}px`;
+  previewMarker.style.top = `${top}px`;
+  previewMarker.style.height = `${height}px`;
 }
 
 const dragDocuments = new WeakSet();
@@ -938,13 +1004,16 @@ function bindListenDrag(doc) {
 }
 
 function unfitListenFrame() {
+  previewMarker?.remove();
+  previewMarker = previewWaveform = undefined;
   legacyHero?.classList.remove('sc-listen-legacy');
+  legacyHero?.style.removeProperty(listenContentOffset);
   fittedFrame?.classList.remove('sc-listen-frame');
   fittedHero?.classList.remove('sc-listen-hero');
   if (fittedDoc) {
     fittedDoc.getElementById('sc-listen-frame')?.remove();
     fittedDoc.querySelector('.sc-listen-scroll')?.classList.remove('sc-listen-scroll');
-    updateListenHeroFooter(fittedDoc, null);
+    updateListenHeroLayout(fittedDoc, null);
   }
   legacyHero = fittedFrame = fittedDoc = fittedHero = undefined;
 }
@@ -954,26 +1023,41 @@ if (process.type === 'renderer') {
   const { ipcRenderer } = require('electron');
   if (process.isMainFrame && location.protocol === 'https:'
     && ['soundcloud.com', 'www.soundcloud.com'].includes(location.hostname)) {
+    const preview = process.argv.includes('--simplecloud-listen-preview');
     sendListenDrag = phase => ipcRenderer.send('simplecloud:listen-drag', phase);
     bindListenDrag(document);
+    if (preview) {
+      sendListenPreviewAction = (...args) => ipcRenderer.send('simplecloud:listen-preview-action', ...args);
+      bindListenPreview(document);
+    }
     let lastSection;
     const publish = createPublisher(state => ipcRenderer.send(channel, state));
     const tickConsent = consentBudget();
-    const consentTimer = setInterval(() => {
+    const consentTimer = !preview && setInterval(() => {
       if (tickConsent()) clearInterval(consentTimer);
     }, 600);
     const timer = setInterval(() => {
-      const route = section();
-      if (route !== lastSection) ipcRenderer.send('simplecloud:site-section', lastSection = route);
-      publish(readPlayer(document.querySelector(playerSelector), location.href));
+      if (!preview) {
+        const route = section();
+        if (route !== lastSection) ipcRenderer.send('simplecloud:site-section', lastSection = route);
+        publish(readPlayer(document.querySelector(playerSelector), location.href));
+      }
       if (listeningTrack && !fittedFrame && !legacyHero) fitListenFrame();
     }, pollMs);
     const declutterTimer = setInterval(() => {
-      declutter();
+      if (!preview) declutter();
       if (document.documentElement.classList.contains('sc-hide-comments')) syncFrameWaveformComments(true);
       if (document.documentElement.classList.contains('sc-listen')) fitListenFrame();
     }, 700);
     ipcRenderer.on('simplecloud:site-action', (_event, name, value) => {
+      if (preview) {
+        if (name === 'listenPreviewPosition') {
+          previewPosition = value;
+          updateListenPreviewPosition();
+          return;
+        }
+        if (name !== 'listenMode' && name !== 'hideComments') return;
+      }
       runAction(name, value, message => ipcRenderer.send('simplecloud:site-error', message));
       if (name === 'listenMode' && Number.isSafeInteger(value.transition)) {
         ipcRenderer.send('simplecloud:listen-skin', value.transition);
@@ -982,7 +1066,7 @@ if (process.type === 'renderer') {
     // A result counts as opened when its link is actually followed from the
     // results page. Play buttons and modified clicks are ignored.
     document.addEventListener('click', event => {
-      if (!event.isTrusted || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      if (preview || !event.isTrusted || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       if (location.pathname !== '/search' && !location.pathname.startsWith('/search/')) return;
       const anchor = event.target?.closest?.('a[href]');
       if (!anchor || anchor.target || anchor.hasAttribute('download')) return;

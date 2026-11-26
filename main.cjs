@@ -19,6 +19,12 @@ if (probe) {
 }
 const shellPath = path.join(__dirname, 'shell.html');
 const shellUrl = pathToFileURL(shellPath).href;
+const listenDockPath = path.join(__dirname, 'listen-dock.html');
+const listenDockUrl = pathToFileURL(listenDockPath).href;
+const listenMessage = text => `data:text/html;charset=utf-8,${encodeURIComponent(
+  `<title>SimpleCloud — Listening</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#202124;color:#bdbfc3;font:14px "Segoe UI",sans-serif}</style><body role="status">${text}</body>`
+)}`;
+const idleListenUrl = listenMessage('Play a track to see its waveform');
 const appIcon = path.join(__dirname, 'assets', 'cloud.png');
 const siteChrome = fs.readFileSync(path.join(__dirname, 'site-chrome.css'), 'utf8');
 const shellBackground = '#202124'; // Matches --bg in shell.css.
@@ -34,6 +40,8 @@ const queueHeight = 200;
 const listenWidth = 1180;
 const listenHeight = 300;
 const listenBarHeight = 48;
+const listenDockSize = 36; // A 28 px button with room for its focus outline.
+const listenDockInset = 8;
 const listenHoverEdge = 16;
 const listenRevealDelay = 120;
 const listenHideDelay = 500;
@@ -66,7 +74,7 @@ function restrictNavigation(contents, allow = permittedPage) {
 
 function readGeometry(file) {
   try {
-    const { x, y, width, height, maximized, pinned, keepListenBar } = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const { x, y, width, height, maximized, pinned, listenPinned, keepListenBar } = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (![x, y, width, height].every(Number.isInteger) || width < minWidth || height < minHeight) return {};
     const display = screen.getDisplayMatching({ x, y, width, height }).workArea;
     const w = Math.min(width, Math.max(display.width, minWidth));
@@ -74,7 +82,8 @@ function readGeometry(file) {
     return {
       x: Math.max(display.x, Math.min(x, display.x + display.width - w)),
       y: Math.max(display.y, Math.min(y, display.y + display.height - h)),
-      width: w, height: h, maximized: maximized === true, pinned: pinned === true, keepListenBar: keepListenBar === true
+      width: w, height: h, maximized: maximized === true, pinned: pinned === true,
+      listenPinned: (listenPinned ?? pinned) === true, keepListenBar: keepListenBar === true
     };
   } catch {
     return {};
@@ -134,37 +143,63 @@ function openShell() {
   if (!probe) {
     try { hideComments = JSON.parse(fs.readFileSync(commentsFile, 'utf8')) === true; } catch { /* default off */ }
   }
-  const { maximized, pinned: savedPin, keepListenBar: savedBar, ...bounds } = probe ? {} : readGeometry(geometryFile);
+  const { maximized, pinned: savedPin, listenPinned, keepListenBar: savedBar, ...bounds } = probe ? {} : readGeometry(geometryFile);
   const window = new BrowserWindow({
     title: 'SimpleCloud', icon: appIcon, width: 1200, height: 850, ...bounds,
     minWidth, minHeight, frame: false, roundedCorners: true,
     ...(process.platform === 'win32' && { accentColor: false }),
     autoHideMenuBar: true, show: false, backgroundColor: shellBackground
   });
-  // A second native host, without a renderer or a second SoundCloud session.
+  // A separate window and passive waveform preview; playback stays in the main window.
   const listeningWindow = new BaseWindow({
     title: 'SimpleCloud — Listening', icon: appIcon, width: listenWidth, height: listenHeight,
     minWidth: minListenWidth, minHeight: minListenHeight, frame: false, roundedCorners: true,
     ...(process.platform === 'win32' && { accentColor: false }),
     maximizable: false, autoHideMenuBar: true, show: false, backgroundColor: shellBackground
   });
-  const shellView = new WebContentsView({
+  const createShellView = () => {
+    const shellView = new WebContentsView({
+      webPreferences: { ...webPreferences, preload: path.join(__dirname, 'shell-preload.cjs') }
+    });
+    shellView.setBackgroundColor(shellBackground);
+    restrictNavigation(shellView.webContents, value => value === shellUrl);
+    shellView.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    return shellView;
+  };
+  // Keep each shell attached to its own native host. Moving a shell between
+  // Windows hosts can leave its compositor surface blank while clicks still work.
+  const shellView = createShellView();
+  const shell = shellView.webContents;
+  window.contentView.addChildView(shellView);
+  const listenShellView = createShellView();
+  const listenShell = listenShellView.webContents;
+  listenShellView.setVisible(false);
+  listeningWindow.contentView.addChildView(listenShellView);
+
+  const listenDockView = new WebContentsView({
     webPreferences: { ...webPreferences, preload: path.join(__dirname, 'shell-preload.cjs') }
   });
-  const shell = shellView.webContents;
-  shellView.setBackgroundColor(shellBackground);
-  window.contentView.addChildView(shellView);
-  restrictNavigation(shell, value => value === shellUrl);
-  shell.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const listenDock = listenDockView.webContents;
+  listenDockView.setBackgroundColor('#00000000');
+  listenDockView.setVisible(false);
+  listeningWindow.contentView.addChildView(listenDockView);
+  restrictNavigation(listenDock, value => value === listenDockUrl);
+  listenDock.setWindowOpenHandler(() => ({ action: 'deny' }));
 
-  const view = new WebContentsView({
-    webPreferences: {
-      ...webPreferences,
-      preload: path.join(__dirname, 'player-bridge.cjs'),
-      partition: probe ? 'simplecloud-probe' : 'persist:soundcloud'
-    }
-  });
+  const sitePreferences = {
+    ...webPreferences, preload: path.join(__dirname, 'player-bridge.cjs'),
+    partition: probe ? 'simplecloud-probe' : 'persist:soundcloud'
+  };
+  const view = new WebContentsView({ webPreferences: sitePreferences });
   const site = view.webContents;
+  const listenView = new WebContentsView({
+    webPreferences: { ...sitePreferences, additionalArguments: ['--simplecloud-listen-preview'] }
+  });
+  const listenSite = listenView.webContents;
+  listenSite.setAudioMuted(true);
+  listenView.setBackgroundColor(shellBackground);
+  listenView.setVisible(false);
+  listeningWindow.contentView.addChildView(listenView, 0);
   const filters = probe ? null : createNetworkFilter(site.session, app.getPath('userData'));
   let listeningCorners;
   if (process.platform === 'win32') {
@@ -177,42 +212,58 @@ function openShell() {
   view.setBackgroundColor(shellBackground);
   window.contentView.addChildView(view);
   let queueOpen = false;
+  let listenQueueOpen = false;
   let siteTop = headerHeight;
-  let mode = 'browser';
+  let listeningOpen = false;
   let listeningPositioned = false;
   let quitting = false;
-  const activeWindow = () => mode === 'listen' ? listeningWindow : window;
-  const volumePopup = createVolumePopup(webPreferences, screen, {
+  const readyShells = new Set();
+  const sendToShell = (contents, channel, ...args) => {
+    if (readyShells.has(contents) && !contents.isDestroyed()) contents.send(channel, ...args);
+  };
+  const createPlayerVolume = contents => createVolumePopup(webPreferences, screen, {
     setVolume: value => {
       if (isPlayerPage(site.getURL())) site.send('simplecloud:site-action', 'volume', value);
     },
     onClose: focus => {
-      if (ready && !shell.isDestroyed()) {
-        if (focus) shell.focus();
-        shell.send('simplecloud:volume-closed', focus);
-      }
-      if (!window.isDestroyed()) showListenBar();
+      if (focus && !contents.isDestroyed()) contents.focus();
+      sendToShell(contents, 'simplecloud:volume-closed', focus);
+      if (contents === listenShell && !listeningWindow.isDestroyed()) showListenBar();
     }
   });
   let dragOrigin;
   let settingsMenu;
   let listenHover = false;
+  let listenDockHover = false;
   let hoverChangedAt;
-  let listenKeyboard = false;
+  let listenFocus;
   let keepListenBar = savedBar === true;
   let hoverTimer;
   let cornersApplied = false;
+  const volumePopup = createPlayerVolume(shell);
+  const listenVolumePopup = createPlayerVolume(listenShell);
   const showListenBar = () => {
-    const visible = mode !== 'listen' || keepListenBar || queueOpen || listenHover || listenKeyboard || volumePopup.visible();
-    if (!visible && shell.isFocused() && listeningWindow.isFocused()) site.focus();
-    shellView.setVisible(visible);
+    const visible = listeningOpen
+      && (keepListenBar || listenQueueOpen || listenHover || listenFocus === 'player' || listenVolumePopup.visible());
+    if (!visible && listenShell.isFocused() && listeningWindow.isFocused()) listenSite.focus();
+    listenShellView.setVisible(visible);
   };
-  const updateListenBar = (point, now = performance.now()) => {
+  const showListenDock = () => {
+    const visible = listeningOpen && (listenDockHover || listenFocus === 'dock');
+    if (!visible && listenDock.isFocused() && listeningWindow.isFocused()) listenSite.focus();
+    listenDockView.setVisible(visible);
+  };
+  const updateListenHover = (point, now = performance.now()) => {
     const { x, y, width, height } = listeningWindow.getContentBounds();
-    const bottom = y + height - (queueOpen ? queueHeight : 0);
+    const bottom = y + height - (listenQueueOpen ? queueHeight : 0);
+    const insideHero = !dragOrigin && point.x >= x && point.x < x + width
+      && point.y >= y && point.y < bottom;
+    if (insideHero !== listenDockHover) {
+      listenDockHover = insideHero;
+      showListenDock();
+    }
     const depth = listenHover ? listenBarHeight + 6 : listenHoverEdge;
-    const next = !dragOrigin && point.x >= x && point.x < x + width
-      && point.y >= bottom - depth && point.y < bottom;
+    const next = insideHero && point.y >= bottom - depth;
     if (next === listenHover) {
       hoverChangedAt = undefined;
       return;
@@ -224,38 +275,43 @@ function openShell() {
     showListenBar();
   };
   listeningWindow.on('blur', () => {
-    if (mode !== 'listen') return;
-    volumePopup.hide();
+    if (!listeningOpen) return;
+    listenVolumePopup.hide();
     dragOrigin = undefined;
-    listenKeyboard = listenHover = false;
+    listenFocus = undefined;
+    listenHover = listenDockHover = false;
     hoverChangedAt = undefined;
     showListenBar();
+    showListenDock();
   });
-  const layout = () => {
+  const layoutBrowser = () => {
     volumePopup.hide();
-    const [width, height] = activeWindow().getContentSize();
-    if (mode === 'listen') {
-      const heroHeight = height - (queueOpen ? queueHeight : 0);
-      view.setBounds({ x: 0, y: 0, width, height: heroHeight });
-      shellView.setBounds({ x: 0, y: heroHeight - listenBarHeight, width, height: height - heroHeight + listenBarHeight });
-      showListenBar();
-      cornersApplied = listeningCorners?.apply() ?? false;
-      return;
-    }
+    const [width, height] = window.getContentSize();
     shellView.setBounds({ x: 0, y: 0, width, height });
-    showListenBar();
     const viewWidth = Math.max(0, width - (queueOpen ? queueWidth : 0));
     view.setBounds({ x: 0, y: siteTop, width: viewWidth, height: Math.max(0, height - siteTop - playerHeight) });
   };
-  layout();
-  window.on('resize', () => { if (mode === 'browser') layout(); });
-  window.on('blur', () => { if (mode === 'browser') volumePopup.hide(); });
-  listeningWindow.on('resize', () => { if (mode === 'listen') layout(); });
+  const layoutListening = () => {
+    listenVolumePopup.hide();
+    const [width, height] = listeningWindow.getContentSize();
+    const heroHeight = height - (listenQueueOpen ? queueHeight : 0);
+    listenView.setBounds({ x: 0, y: 0, width, height: heroHeight });
+    listenShellView.setBounds({ x: 0, y: heroHeight - listenBarHeight, width, height: height - heroHeight + listenBarHeight });
+    listenDockView.setBounds({
+      x: width - listenDockInset - listenDockSize, y: listenDockInset,
+      width: listenDockSize, height: listenDockSize
+    });
+    cornersApplied = listeningCorners?.apply() ?? false;
+  };
+  layoutBrowser();
+  window.on('resize', layoutBrowser);
+  window.on('blur', () => volumePopup.hide());
+  listeningWindow.on('resize', () => { if (listeningOpen) layoutListening(); });
   listeningWindow.on('move', () => {
-    if (mode === 'listen') cornersApplied = listeningCorners?.apply() ?? false;
+    if (listeningOpen) cornersApplied = listeningCorners?.apply() ?? false;
   });
   if (savedPin) window.setAlwaysOnTop(true);
-  if (savedPin) listeningWindow.setAlwaysOnTop(true);
+  if (listenPinned) listeningWindow.setAlwaysOnTop(true);
   if (showShell) {
     shell.once('did-finish-load', () => {
       if (maximized) window.maximize();
@@ -267,7 +323,8 @@ function openShell() {
     window.on('close', () => {
       try {
         fs.writeFileSync(geometryFile, JSON.stringify({
-          ...window.getNormalBounds(), maximized: window.isMaximized(), pinned: window.isAlwaysOnTop(), keepListenBar
+          ...window.getNormalBounds(), maximized: window.isMaximized(), pinned: window.isAlwaysOnTop(),
+          listenPinned: !listeningWindow.isDestroyed() && listeningWindow.isAlwaysOnTop(), keepListenBar
         }));
       } catch (error) {
         console.warn('[shell] Could not save window position:', error.message);
@@ -285,23 +342,33 @@ function openShell() {
     app.off('before-quit', markQuitting);
     clearInterval(hoverTimer);
     volumePopup.destroy();
+    listenVolumePopup.destroy();
     if (!listeningWindow.isDestroyed()) listeningWindow.destroy();
     if (!shell.isDestroyed()) shell.close();
+    if (!listenShell.isDestroyed()) listenShell.close();
     if (!site.isDestroyed()) site.close();
+    if (!listenSite.isDestroyed()) listenSite.close();
+    if (!listenDock.isDestroyed()) listenDock.close();
   });
 
   // Site and shell are separate renderers. The site cannot invoke shell actions.
   restrictSite(site);
+  restrictNavigation(listenSite, isPlayerPage);
+  listenSite.on('will-navigate', event => event.preventDefault());
+  listenSite.setWindowOpenHandler(() => ({ action: 'deny' }));
   const applyCommentPreference = () => {
-    if (!site.isDestroyed() && isPlayerPage(site.getURL())) {
-      site.send('simplecloud:site-action', 'hideComments', hideComments);
+    for (const contents of [site, listenSite]) {
+      if (!contents.isDestroyed() && isPlayerPage(contents.getURL())) {
+        contents.send('simplecloud:site-action', 'hideComments', hideComments);
+      }
     }
   };
   const focusSearch = (event, input) => {
     if (input.type !== 'keyDown' || input.key?.toLowerCase() !== 'f') return;
     if (!input.control || input.alt || input.shift || input.meta) return;
     event.preventDefault();
-    if (mode === 'listen') leaveListen();
+    if (window.isMinimized()) window.restore();
+    if (showShell) window.focus();
     shell.focus();
     shell.send('simplecloud:focus-search');
   };
@@ -309,30 +376,36 @@ function openShell() {
     if (input.type !== 'keyDown' || input.isAutoRepeat || input.key?.toLowerCase() !== 'l') return;
     if (!input.control || !input.shift || input.alt || input.meta) return;
     event.preventDefault();
-    if (mode === 'listen') leaveListen();
+    if (listeningOpen) leaveListen();
     else enterListen();
   };
-  shell.on('before-input-event', focusSearch);
-  site.on('before-input-event', focusSearch);
-  shell.on('before-input-event', toggleListen);
-  site.on('before-input-event', toggleListen);
-  const focusListenBar = (event, input) => {
-    if (mode !== 'listen' || input.type !== 'keyDown' || input.control || input.shift || input.alt || input.meta) return;
-    if (input.key !== 'F6' && !(input.key === 'Escape' && listenKeyboard)) return;
+  const focusListenControls = (event, input) => {
+    if (!listeningOpen || input.type !== 'keyDown' || input.isAutoRepeat || input.control || input.alt || input.meta) return;
+    if (input.key !== 'F6' && !(input.key === 'Escape' && !input.shift && listenFocus)) return;
     event.preventDefault();
-    listenKeyboard = !listenKeyboard;
+    const target = input.shift ? 'dock' : 'player';
+    listenFocus = input.key === 'F6' && target !== listenFocus ? target : undefined;
     showListenBar();
-    if (listenKeyboard) {
-      shell.focus();
-      shell.send('simplecloud:focus-player');
+    showListenDock();
+    if (listenFocus === 'player') {
+      listenShell.focus();
+      sendToShell(listenShell, 'simplecloud:focus-player');
+    } else if (listenFocus === 'dock') {
+      listenDock.focus();
+      listenDock.send('simplecloud:focus-listen-dock');
     } else {
-      site.focus();
+      listenSite.focus();
     }
   };
-  shell.on('before-input-event', focusListenBar);
-  site.on('before-input-event', focusListenBar);
+  for (const contents of [shell, listenShell, site, listenSite, listenDock]) {
+    contents.on('before-input-event', focusSearch);
+    contents.on('before-input-event', toggleListen);
+  }
+  for (const contents of [listenShell, listenSite, listenDock]) {
+    contents.on('before-input-event', focusListenControls);
+  }
   site.on('focus', () => {
-    if (ready && !shell.isDestroyed()) shell.send('simplecloud:blur-search');
+    sendToShell(shell, 'simplecloud:blur-search');
   });
   site.on('dom-ready', async () => {
     if (isPlayerPage(site.getURL())) {
@@ -340,124 +413,157 @@ function openShell() {
       catch (error) { console.warn('[shell] Could not apply site chrome:', error.message); }
       if (site.isDestroyed()) return;
       applyCommentPreference();
-      if (mode === 'listen') syncListenSkin();
     }
   });
 
-  let state, serialized, route, ready, scriptNavigation, followRequest;
+  let state, serialized, route, scriptNavigation, previewUrl, previewReady = false;
   let listenTransition = 0;
+  const broadcastListenPosition = () => {
+    if (!previewReady || state?.status !== 'track') return;
+    listenSite.send('simplecloud:site-action', 'listenPreviewPosition', {
+      trackId: state.trackId, position: state.position, duration: state.duration
+    });
+  };
   const syncListenSkin = () => {
-    if (!isPlayerPage(site.getURL())) { view.setVisible(mode === 'browser'); return; }
-    view.setVisible(false);
-    site.send('simplecloud:site-action', 'listenMode', {
-      enabled: mode === 'listen', trackId: state?.trackId, title: state?.title, transition: ++listenTransition
+    if (!listeningOpen || !previewReady) return;
+    listenSite.send('simplecloud:site-action', 'listenMode', {
+      enabled: true, trackId: state?.trackId, title: state?.title, transition: ++listenTransition
+    });
+    broadcastListenPosition();
+  };
+  listenSite.on('dom-ready', async () => {
+    const url = listenSite.getURL();
+    if (!listeningOpen || !isPlayerPage(url)) return;
+    const transition = listenTransition;
+    try { await listenSite.insertCSS(siteChrome); }
+    catch (error) { console.warn('[shell] Could not apply waveform preview chrome:', error.message); return; }
+    if (!listeningOpen || transition !== listenTransition || url !== listenSite.getURL()) return;
+    previewReady = true;
+    applyCommentPreference();
+    syncListenSkin();
+  });
+  const sendShellState = contents => {
+    const listening = contents === listenShell;
+    sendToShell(contents, 'simplecloud:shell-state', {
+      state, route, pinned: (listening ? listeningWindow : window).isAlwaysOnTop(),
+      mode: listening ? 'listen' : 'browser', keepListenBar, queueOpen: listening ? listenQueueOpen : queueOpen
     });
   };
   const broadcast = () => {
-    if (ready && !shell.isDestroyed()) {
-      shell.send('simplecloud:shell-state', { state, route, pinned: activeWindow().isAlwaysOnTop(), mode, keepListenBar });
-    }
+    sendShellState(shell);
+    if (listeningOpen) sendShellState(listenShell);
     volumePopup.setLevel(state?.volume);
+    listenVolumePopup.setLevel(state?.volume);
   };
-  const report = message => {
+  const report = (message, contents = shell) => {
     if (probe) console.error('[probe]', message);
-    if (ready && !shell.isDestroyed()) shell.send('simplecloud:shell-error', message);
+    sendToShell(contents, 'simplecloud:shell-error', message);
   };
   const setHistory = value => {
     history = value;
     searchHistory.save(historyFile, history);
-    if (ready && !shell.isDestroyed()) shell.send('simplecloud:search-history', history);
+    sendToShell(shell, 'simplecloud:search-history', history);
   };
   const followPlayback = () => {
-    if (mode !== 'listen' || state?.status !== 'track') return;
-    const now = Date.now();
-    if (followRequest?.url === state.trackUrl && followRequest.until > now) return;
-    try {
-      const current = new URL(site.getURL());
-      if (current.pathname.replace(/^\/n(?=\/[^/]+\/[^/]+\/?$)/, '').replace(/\/$/, '')
-        === new URL(state.trackUrl).pathname.replace(/\/$/, '')) return;
-    } catch {
-      return;
-    }
-    followRequest = { url: state.trackUrl, until: now + 3500 };
-    scriptNavigation = { target: undefined, until: followRequest.until };
-    site.send('simplecloud:site-action', 'followTrack', state.trackUrl);
+    if (!listeningOpen) return;
+    const target = state?.status === 'track' && isPlayerPage(state.trackUrl) ? state.trackUrl : idleListenUrl;
+    if (previewUrl === target) return;
+    previewUrl = target;
+    previewReady = false;
+    const transition = ++listenTransition;
+    listenView.setVisible(false);
+    listenSite.loadURL(target).then(() => {
+      if (listeningOpen && transition === listenTransition && target === idleListenUrl) listenView.setVisible(true);
+    }).catch(() => {
+      if (!listeningOpen || transition !== listenTransition) return;
+      void listenSite.loadURL(listenMessage('Waveform unavailable for this track')).then(() => {
+        if (listeningOpen && transition === listenTransition) listenView.setVisible(true);
+      }).catch(() => {});
+    });
   };
   const enterListen = () => {
-    if (mode === 'listen') return;
+    if (listeningOpen) {
+      if (listeningWindow.isMinimized()) listeningWindow.restore();
+      if (showShell) listeningWindow.focus();
+      return;
+    }
     if (!state || !isPlayerPage(site.getURL())) { report('Wait for SoundCloud to finish loading.'); return; }
     const browserBounds = window.getBounds();
     const position = listeningPositioned ? listeningWindow.getBounds() : browserBounds;
     const area = screen.getDisplayMatching(position).workArea;
     const [usualWidth, usualHeight] = listeningWindow.getContentSize();
-    const extraHeight = queueOpen ? queueHeight : 0;
+    const extraHeight = listenQueueOpen ? queueHeight : 0;
     const width = Math.min(listeningPositioned ? usualWidth : listenWidth, area.width);
     const height = Math.min((listeningPositioned ? usualHeight : listenHeight) + extraHeight, area.height);
+    const x = listeningPositioned ? position.x : position.x + Math.max(0, position.width - width);
+    const y = listeningPositioned ? position.y : position.y + Math.max(0, position.height - height);
     listeningWindow.setMinimumSize(minListenWidth, minListenHeight + extraHeight);
     listeningWindow.setContentSize(width, height);
     const bounds = listeningWindow.getBounds();
     listeningWindow.setPosition(
-      Math.max(area.x, Math.min(position.x, area.x + area.width - bounds.width)),
-      Math.max(area.y, Math.min(position.y, area.y + area.height - bounds.height))
+      Math.max(area.x, Math.min(x, area.x + area.width - bounds.width)),
+      Math.max(area.y, Math.min(y, area.y + area.height - bounds.height))
     );
     listeningPositioned = true;
-    shell.send('simplecloud:blur-search');
-    siteTop = headerHeight;
-    mode = 'listen';
-    followRequest = undefined;
-    listenHover = listenKeyboard = false;
+    listeningOpen = true;
+    listenHover = listenDockHover = false;
+    listenFocus = undefined;
     hoverChangedAt = undefined;
-    volumePopup.hide();
-    syncListenSkin();
-    window.contentView.removeChildView(view);
-    window.contentView.removeChildView(shellView);
-    listeningWindow.contentView.addChildView(view);
-    listeningWindow.contentView.addChildView(shellView);
     broadcast();
-    layout();
-    if (showShell) {
-      listeningWindow.show();
-      window.hide();
-    }
+    layoutListening();
+    if (showShell) listeningWindow.show();
+    showListenBar();
     if (!probe) {
       hoverTimer = setInterval(() => {
-        if (listeningWindow.isFocused() || (listeningWindow.isAlwaysOnTop() && !listeningWindow.isMinimized())) {
-          updateListenBar(screen.getCursorScreenPoint());
+        if (!listeningWindow.isMinimized()) {
+          updateListenHover(screen.getCursorScreenPoint());
         }
       }, 40);
     }
-    site.focus();
     followPlayback();
   };
   const leaveListen = () => {
-    if (mode !== 'listen') return;
+    if (!listeningOpen) return;
     dragOrigin = undefined;
     clearInterval(hoverTimer);
-    volumePopup.hide();
-    mode = 'browser';
-    syncListenSkin();
-    listeningWindow.contentView.removeChildView(shellView);
-    listeningWindow.contentView.removeChildView(view);
-    window.contentView.addChildView(shellView);
-    window.contentView.addChildView(view);
+    listeningOpen = false;
+    listenVolumePopup.hide();
+    previewUrl = undefined;
+    previewReady = false;
+    ++listenTransition;
+    listenView.setVisible(false);
+    showListenBar();
+    showListenDock();
     listeningWindow.hide();
-    if (queueOpen) {
+    void listenSite.loadURL('about:blank').catch(() => {});
+    if (listenQueueOpen) {
       const [width, height] = listeningWindow.getContentSize();
       listeningWindow.setMinimumSize(minListenWidth, minListenHeight);
       listeningWindow.setContentSize(width, height - queueHeight);
     }
-    scriptNavigation = undefined;
-    broadcast();
-    layout();
-    if (showShell) window.show();
-    site.focus();
   };
   const from = (event, allow) => event.senderFrame && !event.senderFrame.parent && allow(event.senderFrame.url);
-  site.ipc.on('simplecloud:listen-skin', (event, transition) => {
-    if (from(event, isPlayerPage) && transition === listenTransition) view.setVisible(true);
+  listenDock.ipc.on('simplecloud:shell-action', (event, name) => {
+    if (name === 'close' && listeningOpen && listenDockView.getVisible() && from(event, url => url === listenDockUrl)) {
+      listeningWindow.close();
+    }
   });
-  site.ipc.on('simplecloud:listen-drag', (event, phase) => {
-    if (mode !== 'listen' || !listeningWindow.isFocused() || !from(event, isPlayerPage)) return;
+  listenSite.ipc.on('simplecloud:listen-skin', (event, transition) => {
+    if (listeningOpen && from(event, isPlayerPage) && transition === listenTransition) {
+      listenView.setVisible(true);
+      if (listeningWindow.isFocused() && !listenFocus) listenSite.focus();
+    }
+  });
+  listenSite.ipc.on('simplecloud:listen-preview-action', (event, name, trackId, ratio) => {
+    if (!listeningOpen || !previewReady || !listenView.getVisible() || !from(event, isPlayerPage)
+      || state?.status !== 'track' || trackId !== state.trackId || !isPlayerPage(site.getURL())) return;
+    if (name === 'play' && state.controls?.play) site.send('simplecloud:site-action', 'play');
+    if (name === 'seek' && state.controls?.seek && Number.isFinite(ratio) && ratio >= 0 && ratio <= 1) {
+      site.send('simplecloud:site-action', 'seek', { trackId, ratio });
+    }
+  });
+  listenSite.ipc.on('simplecloud:listen-drag', (event, phase) => {
+    if (!listeningOpen || !listeningWindow.isFocused() || !from(event, isPlayerPage)) return;
     if (phase === 'end') {
       dragOrigin = undefined;
     } else if (phase === 'start') {
@@ -470,24 +576,30 @@ function openShell() {
       listeningWindow.setPosition(x - dragOrigin.x, y - dragOrigin.y);
     }
   });
-  shell.ipc.on('simplecloud:shell-ready', event => {
+  const onShellReady = event => {
     if (!from(event, value => value === shellUrl)) return;
-    ready = true;
-    shell.send('simplecloud:search-history', history);
-    broadcast();
+    const contents = event.sender;
+    readyShells.add(contents);
+    if (contents === shell) sendToShell(shell, 'simplecloud:search-history', history);
+    sendShellState(contents);
     checkProbe();
-  });
-  shell.ipc.on('simplecloud:shell-action', (event, name, value) => {
-    if (!from(event, url => url === shellUrl)) return;
+  };
+  const onShellAction = (event, name, value) => {
+    const contents = event.sender;
+    const listening = contents === listenShell;
+    if ((listening && !listeningOpen) || !from(event, url => url === shellUrl)) return;
+    const host = listening ? listeningWindow : window;
+    const chrome = listening ? listenShellView : shellView;
+    const popup = listening ? listenVolumePopup : volumePopup;
     if (name === 'volumePopup') {
-      if (Number.isFinite(state?.volume) && shellView.getVisible()
-        && volumePopup.show(activeWindow(), shellView.getBounds(), value)) {
-        shell.send('simplecloud:volume-opened');
+      if (Number.isFinite(state?.volume) && chrome.getVisible()
+        && popup.show(host, chrome.getBounds(), value)) {
+        sendToShell(contents, 'simplecloud:volume-opened');
       }
       return;
     }
-    if (name === 'volumeDismiss') { volumePopup.hide(); return; }
-    if (mode === 'browser') {
+    if (name === 'volumeDismiss') { popup.hide(); return; }
+    if (!listening) {
       if (name === 'minimize') { window.minimize(); return; }
       if (name === 'maximize') {
         if (window.isMaximized()) window.unmaximize();
@@ -498,48 +610,41 @@ function openShell() {
       if (name === 'settings') { settingsMenu?.popup({ window }); return; }
     }
     if (name === 'pin') {
-      const pinned = !activeWindow().isAlwaysOnTop();
-      window.setAlwaysOnTop(pinned);
-      listeningWindow.setAlwaysOnTop(pinned);
+      host.setAlwaysOnTop(!host.isAlwaysOnTop());
       broadcast();
       return;
     }
-    if (name === 'keepBar' && mode === 'listen') {
+    if (name === 'keepBar' && listening) {
       keepListenBar = !keepListenBar;
       showListenBar();
       broadcast();
       return;
     }
     if (name === 'queuePanel') {
-      const open = value === true;
-      if (mode === 'listen' && open !== queueOpen) {
+      const current = listening ? listenQueueOpen : queueOpen;
+      const open = typeof value === 'boolean' ? value : !current;
+      if (open === current) return;
+      if (listening) {
         const [width, height] = listeningWindow.getContentSize();
-        if (open) {
-          listeningWindow.setMinimumSize(minListenWidth, minListenHeight + queueHeight);
-          queueOpen = true;
-          listeningWindow.setContentSize(width, height + queueHeight);
-        } else {
-          listeningWindow.setMinimumSize(minListenWidth, minListenHeight);
-          queueOpen = false;
-          listeningWindow.setContentSize(width, height - queueHeight);
-        }
+        listenQueueOpen = open;
+        listeningWindow.setMinimumSize(minListenWidth, minListenHeight + (open ? queueHeight : 0));
+        listeningWindow.setContentSize(width, height + (open ? queueHeight : -queueHeight));
+        layoutListening();
+        showListenBar();
       } else {
         queueOpen = open;
+        layoutBrowser();
       }
-      layout();
+      broadcast();
       return;
     }
-    if (name === 'mode') {
-      if (mode === 'listen') leaveListen();
-      else enterListen();
-      return;
-    }
+    if (name === 'mode' && !listening) { enterListen(); return; }
     if (name === 'searchPanel') {
-      if (mode !== 'browser') return;
+      if (listening) return;
       siteTop = Number.isFinite(value)
         ? Math.min(Math.max(headerHeight, Math.round(value)), headerHeight + 420)
         : headerHeight;
-      layout();
+      layoutBrowser();
       return;
     }
     if (name === 'searchHistoryRemove' && typeof value === 'string') {
@@ -550,8 +655,8 @@ function openShell() {
       setHistory([]);
       return;
     }
-    if (name === 'focusSite') { site.focus(); return; }
-    if (!isPlayerPage(site.getURL())) { report('Wait for SoundCloud to finish loading.'); return; }
+    if (name === 'focusSite') { (listening ? listenSite : site).focus(); return; }
+    if (!isPlayerPage(site.getURL())) { report('Wait for SoundCloud to finish loading.', contents); return; }
     if (name === 'navigate' && (!routeNames.has(value) || value === 'search')) return;
     if (name === 'search' && (typeof value !== 'string' || !value.trim() || value.length > 200)) return;
     if (name === 'openUrl' && (typeof value !== 'string' || !permittedPage(value)
@@ -571,7 +676,11 @@ function openShell() {
     }
     site.send('simplecloud:site-action', name, value);
     if (name === 'search' || name === 'openUrl') site.focus();
-  });
+  };
+  for (const contents of [shell, listenShell]) {
+    contents.ipc.on('simplecloud:shell-ready', onShellReady);
+    contents.ipc.on('simplecloud:shell-action', onShellAction);
+  }
   site.on('will-navigate', event => {
     if (scriptNavigation?.until > Date.now()) {
       event.preventDefault();
@@ -582,11 +691,8 @@ function openShell() {
   site.on('did-start-navigation', details => {
     if (!details.isMainFrame || details.isSameDocument) return;
     state = serialized = route = undefined;
-    if (mode === 'listen') view.setVisible(false);
+    followPlayback();
     broadcast();
-  });
-  site.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
-    if (isMainFrame && mode === 'listen') syncListenSkin();
   });
   site.ipc.on('simplecloud:site-section', (event, value) => {
     if (!from(event, isPlayerPage) || (value !== null && !routeNames.has(value))) return;
@@ -600,7 +706,9 @@ function openShell() {
     if (entry) setHistory(searchHistory.addEntry(history, entry));
   });
   site.ipc.on('simplecloud:site-error', (event, value) => {
-    if (from(event, isPlayerPage) && typeof value === 'string' && value.length <= 200) report(value);
+    if (!from(event, isPlayerPage) || typeof value !== 'string' || value.length > 200) return;
+    report(value);
+    if (listeningOpen) sendToShell(listenShell, 'simplecloud:shell-error', value);
   });
   let stall = { position: null, since: 0, tries: 0, warned: false };
   const watchdog = value => {
@@ -620,11 +728,10 @@ function openShell() {
     const json = JSON.stringify(value);
     if (json.length > 16384 || json === serialized) return;
     serialized = json;
-    const trackChanged = value.trackId !== state?.trackId;
     state = value;
-    if (mode === 'listen' && trackChanged) syncListenSkin();
     if (probe) console.log('[bridge]', value.status);
     followPlayback();
+    broadcastListenPosition();
     watchdog(value);
     broadcast();
     checkProbe();
@@ -710,7 +817,7 @@ function openShell() {
               title: 'SimpleCloud diagnostics',
               message: 'SoundCloud connection',
               detail: [
-                `Mode: ${mode === 'listen' ? 'Listening' : 'Browser'}`,
+                `Listening window: ${listeningOpen ? 'Open' : 'Closed'}`,
                 `Site: ${isPlayerPage(site.getURL()) ? 'SoundCloud' : 'Not on a player page'}`,
                 `Player bridge: ${state?.status === 'track' ? 'Track detected' : state ? 'Connected, idle' : 'Waiting for player'}`,
                 `Controls detected: ${Object.entries(state?.controls ?? {}).filter(([, enabled]) => enabled === true).map(([name]) => name).join(', ') || 'None yet'}`,
@@ -749,7 +856,19 @@ function openShell() {
       return scrollY;
     })()`);
     if (preservedScroll !== 160) throw new Error('The browser scroll fixture is not scrollable.');
-    await site.executeJavaScript(`(() => {
+    await shell.executeJavaScript(`document.getElementById('mode').click()`);
+    const idleDeadline = Date.now() + 1500;
+    while (!listenView.getVisible() && Date.now() < idleDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 30));
+    }
+    if (!listeningOpen || !listenView.getVisible() || listenSite.getURL() !== idleListenUrl) {
+      throw new Error('Opening Listening did not display the idle waveform view.');
+    }
+    previewUrl = home;
+    ++listenTransition;
+    listenView.setVisible(false);
+    await listenSite.loadURL(home);
+    await listenSite.executeJavaScript(`(() => {
       const unrelated = document.createElement('iframe');
       unrelated.id = 'simplecloud-home-slider-fixture';
       unrelated.className = 'webiIframe';
@@ -763,8 +882,8 @@ function openShell() {
       frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:400px;height:260px';
       frame.srcdoc = '<main><section id="hero"><div><div style="display:flex">'
         + '<div id="column" style="display:flex;flex:1;flex-direction:column;justify-content:space-between;height:240px">'
-        + '<div><h1>Track</h1></div><div id="wave" style="height:100px"><div class="MuiSlider-root"></div></div>'
-        + '<div id="hero-actions"><button>Write a comment</button></div></div><div>Artwork</div>'
+          + '<div id="hero-title"><h2>Track</h2></div><div id="wave" style="height:100px"><div class="MuiSlider-root" style="height:100%"></div></div>'
+         + '<div id="hero-actions"><button>Write a comment</button></div></div><div id="hero-artwork">Artwork</div>'
         + '</div></div></section><section id="discussion">Comments</section></main>';
       return new Promise(resolve => {
         frame.addEventListener('load', () => resolve(), { once: true });
@@ -772,62 +891,85 @@ function openShell() {
       });
     })()`);
     const checkHeroActions = async hidden => {
-      const result = await site.executeJavaScript(`(() => {
+      const result = await listenSite.executeJavaScript(`(() => {
         const doc = document.getElementById('simplecloud-listening-fixture').contentDocument;
         const style = id => doc.defaultView.getComputedStyle(doc.getElementById(id));
         const rect = id => doc.getElementById(id).getBoundingClientRect();
-        const middle = box => box.top + box.height / 2;
+        const hero = rect('hero');
+        const title = rect('hero-title');
+        const wave = rect('wave');
+        const midpoint = (hero.top + hero.bottom) / 2;
         return {
           hidden: style('hero-actions').display === 'none',
-          centered: style('column').display === 'grid' && style('wave').gridRowStart === '2',
-          centerError: rect('wave').height > 0 ? Math.abs(middle(rect('hero')) - middle(rect('wave'))) : null,
-          offset: doc.getElementById('wave').style.getPropertyValue('--sc-listen-waveform-offset'),
+          grouped: style('column').display === 'grid',
+          titleTop: title.top,
+          artworkTop: rect('hero-artwork').top,
+          groupLift: midpoint - (title.top + wave.bottom) / 2,
+          waveBelowCenter: (wave.top + wave.bottom) / 2 > midpoint,
+          offset: doc.getElementById('column').style.getPropertyValue('--sc-listen-content-offset'),
           discussion: style('discussion').display !== 'none'
         };
       })()`);
-      if (result.hidden !== hidden || result.centered !== hidden || !result.discussion
-        || (hidden ? result.centerError === null || result.centerError > 1 : result.offset !== '')) {
-        throw new Error(`Listening-only hero row did not toggle correctly: ${JSON.stringify(result)}`);
+      if (result.hidden !== hidden || result.grouped !== hidden || !result.discussion
+        || (hidden ? Math.abs(result.groupLift - 8) > 1 || !result.waveBelowCenter : result.offset !== '')) {
+        throw new Error(`Listening-only track layout did not toggle correctly: ${JSON.stringify(result)}`);
       }
+      return result;
     };
     hideComments = true;
     applyCommentPreference();
     await checkHeroActions(false);
-    await shell.executeJavaScript(`document.getElementById('mode').click()`);
-    await new Promise(resolve => setTimeout(resolve, 600));
-    const started = await shell.executeJavaScript(`(() => ({
+    const started = await listenShell.executeJavaScript(`(() => ({
       listen: document.body.classList.contains('listen'),
       header: getComputedStyle(document.querySelector('.header')).display,
       scrolls: document.documentElement.scrollHeight > innerHeight || document.body.scrollHeight > innerHeight,
       strip: Math.round(document.querySelector('.player').getBoundingClientRect().height)
     }))()`);
     const base = listeningWindow.getContentSize();
-    const listenBounds = view.getBounds();
-    if (!started.listen || started.header !== 'none' || started.scrolls || shellView.getVisible() || started.strip !== listenBarHeight
+    const listenBounds = listenView.getBounds();
+    if (!started.listen || started.header !== 'none' || started.scrolls || listenShellView.getVisible()
+      || listenDockView.getVisible() || started.strip !== listenBarHeight
       || listenBounds.y !== 0 || listenBounds.height !== base[1]) {
       throw new Error(`Listening layout is wrong: ${JSON.stringify({ started, listenBounds, base })}`);
     }
-    if (!listeningWindow.contentView.children.includes(view) || !listeningWindow.contentView.children.includes(shellView)
-      || window.contentView.children.includes(view) || JSON.stringify(window.getBounds()) !== JSON.stringify(browserBounds)) {
-      throw new Error('Detaching did not move the existing views into a separate host while preserving the browser bounds.');
+    if (!listeningWindow.contentView.children.includes(listenView) || !listeningWindow.contentView.children.includes(listenShellView)
+      || !window.contentView.children.includes(view) || !window.contentView.children.includes(shellView)
+      || JSON.stringify(window.getBounds()) !== JSON.stringify(browserBounds)) {
+      throw new Error('Listening did not keep both the main page and preview attached to their own windows.');
     }
-    if (showShell && (!listeningWindow.isVisible() || window.isVisible())) {
-      throw new Error('Detached mode did not show just the compact window.');
+    if (showShell && (!listeningWindow.isVisible() || !window.isVisible())) {
+      throw new Error('The Listening window did not open alongside the main window.');
     }
-    const detachControl = await shell.executeJavaScript(`document.querySelector('[data-action="mode"] use').getAttribute('href')`);
-    if (detachControl !== '#i-window') throw new Error('The dock button did not use the browser-window icon.');
-    listeningWindow.setContentSize(minListenWidth, base[1]);
-    const fitsCompact = await shell.executeJavaScript(`(() => {
-      const bar = document.querySelector('.player');
-      const controls = document.querySelector('.track-actions');
-      return controls.getBoundingClientRect().right <= bar.getBoundingClientRect().right
-        && getComputedStyle(document.getElementById('mute')).display !== 'none';
+    const cornerButton = await listenDock.executeJavaScript(`(() => {
+      const buttons = document.querySelectorAll('button');
+      return buttons.length === 1 && buttons[0].getAttribute('aria-label') === 'Close listening window';
     })()`);
-    listeningWindow.setContentSize(...base);
-    if (!fitsCompact) throw new Error('The listening player overflows at its minimum width.');
+    if (!cornerButton) throw new Error('Close listening window must be the only corner button.');
+    if (showShell) {
+      // Chromium defers viewport changes on the hidden native host used by the default probe.
+      listenFocus = 'player';
+      showListenBar();
+      listeningWindow.setContentSize(minListenWidth, base[1]);
+      const resizeDeadline = Date.now() + 1000;
+      while (await listenShell.executeJavaScript('innerWidth') !== minListenWidth && Date.now() < resizeDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 30));
+      }
+      const size = await listenShell.executeJavaScript(`({
+        width: document.querySelector('.player').getBoundingClientRect().width,
+        controlEdge: document.querySelector('.track-actions').getBoundingClientRect().right,
+        speakerVisible: getComputedStyle(document.getElementById('mute')).display !== 'none'
+      })`);
+      listeningWindow.setContentSize(...base);
+      listenFocus = undefined;
+      showListenBar();
+      if (size.width !== minListenWidth || size.controlEdge > size.width || !size.speakerVisible) {
+        throw new Error(`The listening player does not fit its minimum width: ${JSON.stringify(size)}`);
+      }
+    }
     if (process.platform === 'win32' && !cornersApplied) throw new Error('The Windows listening corner mask was not applied.');
-    if (!await site.executeJavaScript(`document.documentElement.classList.contains('sc-listen')`)) {
-      throw new Error('SoundCloud did not switch its own chrome for listening mode.');
+    if (!await listenSite.executeJavaScript(`document.documentElement.classList.contains('sc-listen')`)
+      || await site.executeJavaScript(`document.documentElement.classList.contains('sc-listen')`)) {
+      throw new Error('Listening chrome did not stay confined to the waveform preview.');
     }
     const siteBar = await site.executeJavaScript(`(() => {
       const bar = document.querySelector('.playControls');
@@ -836,7 +978,7 @@ function openShell() {
     if (siteBar !== '0' && siteBar !== 'missing') {
       throw new Error(`SoundCloud's own player bar still paints (${siteBar}).`);
     }
-    const placeholderOnly = await site.executeJavaScript(`(() => {
+    const placeholderOnly = await listenSite.executeJavaScript(`(() => {
       const home = document.getElementById('simplecloud-home-slider-fixture');
       const status = document.querySelector('.sc-listen-placeholder');
       return !document.querySelector('.sc-listen-frame') && getComputedStyle(home).visibility === 'hidden'
@@ -844,80 +986,119 @@ function openShell() {
     })()`);
     if (!placeholderOnly) throw new Error('Listening mode exposed Home or fitted a non-track iframe.');
     const previousState = state;
-    await site.executeJavaScript(`history.replaceState(history.state, '', '/n/simplecloud-probe/listening/')`);
-    state = { ...state, trackId: '/simplecloud-probe/listening', title: 'Track' };
+    await listenSite.executeJavaScript(`history.replaceState(history.state, '', '/n/simplecloud-probe/listening/')`);
+    state = { ...state, status: 'track', trackId: '/simplecloud-probe/listening', title: 'Track', position: 35, duration: 100 };
     syncListenSkin();
-    const heroFrame = await site.executeJavaScript(`(() => {
+    const heroDeadline = Date.now() + 1500;
+    while (!await listenSite.executeJavaScript(`Boolean(document.querySelector('#simplecloud-listening-fixture.sc-listen-frame'))`)
+      && Date.now() < heroDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 30));
+    }
+    const heroFrame = await listenSite.executeJavaScript(`(() => {
       const frame = document.getElementById('simplecloud-listening-fixture');
+      const doc = frame.contentDocument;
+      const marker = doc.querySelector('.sc-listen-preview-progress');
+      const wave = doc.querySelector('.MuiSlider-root').getBoundingClientRect();
       return {
         fitted: frame.classList.contains('sc-listen-frame'),
-        style: Boolean(frame.contentDocument.getElementById('sc-listen-frame')),
+        style: Boolean(doc.getElementById('sc-listen-frame')),
+        playhead: marker && Math.abs(marker.getBoundingClientRect().left - wave.left - wave.width * .35) < 1,
         homeHidden: getComputedStyle(document.getElementById('simplecloud-home-slider-fixture')).visibility === 'hidden'
       };
     })()`);
-    if (!heroFrame.fitted || !heroFrame.style || !heroFrame.homeHidden) {
+    if (!heroFrame.fitted || !heroFrame.style || !heroFrame.playhead || !heroFrame.homeHidden) {
       throw new Error(`The crossfade hero frame was not fitted: ${JSON.stringify(heroFrame)}`);
     }
     await checkHeroActions(true);
     hideComments = false;
     applyCommentPreference();
-    await checkHeroActions(false);
+    const commentsOn = await checkHeroActions(false);
     hideComments = true;
     applyCommentPreference();
-    await checkHeroActions(true);
+    const commentsOff = await checkHeroActions(true);
+    if (commentsOff.titleTop <= commentsOn.titleTop || commentsOff.artworkTop !== commentsOn.artworkTop) {
+      throw new Error('Hiding waveform comments did not move the track content down independently of the artwork.');
+    }
     const content = listeningWindow.getContentBounds();
     const edge = { x: content.x + 40, y: content.y + content.height - 2 };
     const hero = { x: content.x + 40, y: content.y + 40 };
-    updateListenBar(edge, 0);
-    updateListenBar(edge, listenRevealDelay - 1);
-    if (shellView.getVisible()) throw new Error('The bar appeared before the reveal delay.');
-    updateListenBar(edge, listenRevealDelay);
-    updateListenBar({ x: edge.x, y: content.y + content.height - listenBarHeight + 2 }, listenRevealDelay + 20);
-    if (!shellView.getVisible() || shellView.getBounds().y !== base[1] - listenBarHeight
-      || view.getBounds().height !== base[1]) {
+    const outside = { x: content.x - 1, y: hero.y };
+    updateListenHover(edge, 0);
+    updateListenHover(edge, listenRevealDelay - 1);
+    if (listenShellView.getVisible()) throw new Error('The bar appeared before the reveal delay.');
+    updateListenHover(edge, listenRevealDelay);
+    updateListenHover({ x: edge.x, y: content.y + content.height - listenBarHeight + 2 }, listenRevealDelay + 20);
+    if (!listenShellView.getVisible() || listenShellView.getBounds().y !== base[1] - listenBarHeight
+       || listenView.getBounds().height !== base[1]) {
       throw new Error('Hover did not overlay the listening bar without resizing the hero.');
     }
     const leftAt = listenRevealDelay + 40;
-    updateListenBar(hero, leftAt);
-    updateListenBar(hero, leftAt + listenHideDelay - 1);
-    if (!shellView.getVisible()) throw new Error('The bar did not linger on pointer exit.');
-    updateListenBar(hero, leftAt + listenHideDelay);
-    if (shellView.getVisible() || view.getBounds().height !== base[1]) {
+    updateListenHover(hero, leftAt);
+    updateListenHover(hero, leftAt + listenHideDelay - 1);
+    if (!listenShellView.getVisible()) throw new Error('The bar did not linger on pointer exit.');
+    updateListenHover(hero, leftAt + listenHideDelay);
+    if (listenShellView.getVisible() || listenView.getBounds().height !== base[1]) {
       throw new Error('Leaving the bar did not reveal the entire hero.');
     }
-    await site.sendInputEvent({ type: 'keyDown', keyCode: 'F6' });
-    if (!shellView.getVisible()) throw new Error('F6 did not reveal the listening bar.');
-    await checkVolumePopup(false);
-    const toggleBar = () => shell.executeJavaScript(`document.querySelector('[data-action="keepBar"]').click()`);
-    await toggleBar();
-    await shell.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
-    const pressed = await shell.executeJavaScript(`document.querySelector('[data-action="keepBar"]').getAttribute('aria-pressed')`);
-    if (!shellView.getVisible() || pressed !== 'true') throw new Error('Keeping the bar visible did not survive keyboard dismissal.');
-    await toggleBar();
-    if (shellView.getVisible()) throw new Error('Releasing the bar did not restore hover-only behavior.');
+    const dockBounds = listenDockView.getBounds();
+    if (!listenDockView.getVisible() || dockBounds.x + dockBounds.width !== base[0] - listenDockInset
+       || dockBounds.y !== listenDockInset) throw new Error('Hover did not reveal the close button in the top-right corner.');
+    updateListenHover(outside);
+    if (listenDockView.getVisible()) throw new Error('The close button did not hide on pointer exit.');
+    await listenSite.sendInputEvent({ type: 'keyDown', keyCode: 'F6' });
+    if (!listenShellView.getVisible()) throw new Error('F6 did not reveal the listening bar.');
+    await checkVolumePopup(false, true);
+    const clickPin = action => listenShell.executeJavaScript(`document.querySelector('.player [data-action="${action}"]').click()`);
+    await clickPin('pin');
+    if (!listeningWindow.isAlwaysOnTop() || window.isAlwaysOnTop()) throw new Error('The Listening pin did not keep only its own window on top.');
+    await clickPin('pin');
+    if (listeningWindow.isAlwaysOnTop() || window.isAlwaysOnTop()) throw new Error('Unpinning did not restore normal window stacking.');
+    await clickPin('keepBar');
+    await listenShell.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+    const pressed = await listenShell.executeJavaScript(`document.querySelector('[data-action="keepBar"]').getAttribute('aria-pressed')`);
+    if (!listenShellView.getVisible() || listenDockView.getVisible() || pressed !== 'true') {
+      throw new Error('Keeping the bar visible did not survive keyboard dismissal.');
+    }
+    await clickPin('keepBar');
+    if (listenShellView.getVisible()) throw new Error('Releasing the bar did not restore hover-only behavior.');
+    await listenSite.sendInputEvent({ type: 'keyDown', keyCode: 'F6', modifiers: ['shift'] });
+    const focusDeadline = Date.now() + 1000;
+    let dockFocused;
+    do {
+      dockFocused = await listenDock.executeJavaScript(`document.activeElement.id === 'dock'`);
+      if (!dockFocused) await new Promise(resolve => setTimeout(resolve, 30));
+    } while (!dockFocused && Date.now() < focusDeadline);
+    if (!listenDockView.getVisible() || !dockFocused || listenShellView.getVisible()) {
+      throw new Error(`Shift+F6 did not focus the listening window’s close button: ${JSON.stringify({
+        focused: dockFocused, dock: listenDockView.getVisible(), bar: listenShellView.getVisible()
+      })}`);
+    }
+    await listenDock.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+    if (listenDockView.getVisible()) throw new Error('Escape did not hide the close button.');
     state = previousState;
-    await site.executeJavaScript(`history.replaceState(history.state, '', ${JSON.stringify(browserUrl)})`);
+    await listenSite.executeJavaScript(`history.replaceState(history.state, '', ${JSON.stringify(browserUrl)})`);
     syncListenSkin();
-    if (await site.executeJavaScript(`(() => {
+    if (await listenSite.executeJavaScript(`(() => {
       const frame = document.getElementById('simplecloud-listening-fixture');
       return frame.classList.contains('sc-listen-frame')
         || !!frame.contentDocument.getElementById('sc-listen-frame')
         || !!frame.contentDocument.querySelector('.sc-listen-scroll, .sc-listen-hero');
     })()`)) throw new Error('A stale track iframe kept its listening styles after a route change.');
-    await shell.executeJavaScript(`document.querySelector('[data-action="queue"]').click()`);
+    await listenShell.executeJavaScript(`document.querySelector('[data-action="queue"]').click()`);
     await new Promise(resolve => setTimeout(resolve, 500));
     const grown = listeningWindow.getContentSize();
-    const drawer = await shell.executeJavaScript(`(() => {
+    const drawer = await listenShell.executeJavaScript(`(() => {
       const box = document.querySelector('.queue').getBoundingClientRect();
       return { height: Math.round(box.height), bottom: Math.round(innerHeight - box.bottom),
         open: !document.querySelector('.queue').hidden };
     })()`);
     if (!drawer.open || drawer.height !== queueHeight || drawer.bottom !== 0
       || grown[1] !== base[1] + queueHeight
-       || view.getBounds().height !== grown[1] - queueHeight) {
-      throw new Error(`Listening queue is wrong: ${JSON.stringify({ drawer, grown, base, view: view.getBounds() })}`);
+        || listenView.getBounds().height !== grown[1] - queueHeight || queueOpen) {
+      throw new Error(`Listening queue is wrong: ${JSON.stringify({ drawer, grown, base, view: listenView.getBounds() })}`);
     }
-    await shell.executeJavaScript(`document.querySelector('[data-action="mode"]').click()`);
+    updateListenHover(hero);
+    await listenDock.executeJavaScript(`document.getElementById('dock').click()`);
     await new Promise(resolve => setTimeout(resolve, 700));
     const restored = await shell.executeJavaScript(`(() => ({
       listen: document.body.classList.contains('listen'),
@@ -930,7 +1111,8 @@ function openShell() {
     if (restored.listen || restored.drag !== 'drag' || restored.noDrag !== 'no-drag' || restored.settingsIcon !== 24
       || restored.top !== headerHeight || view.getBounds().y !== headerHeight
        || size[0] !== before[0] || size[1] !== before[1] || !window.contentView.children.includes(view)
-       || listeningWindow.contentView.children.includes(view) || listeningWindow.getContentSize()[1] !== base[1]) {
+       || listeningWindow.contentView.children.includes(view) || !listeningWindow.contentView.children.includes(listenDockView)
+       || listeningWindow.getContentSize()[1] !== base[1]) {
       throw new Error(`Browser layout was not restored: ${JSON.stringify({ restored, size, before })}`);
     }
     if (await site.executeJavaScript(`document.documentElement.classList.contains('sc-listen')`)) {
@@ -939,29 +1121,24 @@ function openShell() {
     if (showShell && (!window.isVisible() || listeningWindow.isVisible())) {
       throw new Error('Docking did not show just the browser window.');
     }
+    const browserQueueOpen = await shell.executeJavaScript(`!document.querySelector('.queue').hidden`);
     if (site.getURL() !== browserUrl || await site.executeJavaScript('scrollY') !== preservedScroll
-      || !queueOpen || view.getBounds().width !== size[0] - queueWidth) {
-      throw new Error('Reattaching lost the browser location, scroll position, or open queue.');
+      || queueOpen || browserQueueOpen || view.getBounds().width !== size[0]) {
+      throw new Error('Opening or closing Listening changed the main page, scroll or queue.');
     }
-    await shell.executeJavaScript(`document.getElementById('queue-close').click()`);
-    await checkHeroActions(false);
     hideComments = false;
     applyCommentPreference();
-    await site.executeJavaScript(`
-      document.getElementById('simplecloud-listening-fixture').remove();
-      document.getElementById('simplecloud-home-slider-fixture').remove();
-      document.getElementById('simplecloud-scroll-fixture').remove();
-    `);
+    await site.executeJavaScript(`document.getElementById('simplecloud-scroll-fixture').remove()`);
     await site.sendInputEvent({ type: 'keyDown', keyCode: 'L', modifiers: ['control', 'shift'] });
     await site.sendInputEvent({ type: 'keyUp', keyCode: 'L', modifiers: ['control', 'shift'] });
     await new Promise(resolve => setTimeout(resolve, 500));
-    if (!await shell.executeJavaScript(`document.body.classList.contains('listen')`)) {
+    if (!listeningOpen || !listeningWindow.contentView.children.includes(listenView)) {
       throw new Error('Ctrl+Shift+L did not enter listening mode.');
     }
     await site.sendInputEvent({ type: 'keyDown', keyCode: 'L', modifiers: ['control', 'shift'] });
     await site.sendInputEvent({ type: 'keyUp', keyCode: 'L', modifiers: ['control', 'shift'] });
     await new Promise(resolve => setTimeout(resolve, 700));
-    if (await shell.executeJavaScript(`document.body.classList.contains('listen')`)
+    if (listeningOpen
       || view.getBounds().y !== headerHeight || window.getContentSize()[1] !== before[1]) {
       throw new Error('Ctrl+Shift+L did not restore browser mode.');
     }
@@ -973,33 +1150,41 @@ function openShell() {
       }
       if (!predicate(new URL(site.getURL()))) throw new Error(`In-page route check timed out at ${site.getURL()}`);
     };
-    site.send('simplecloud:site-action', 'search', 'simplecloud-detached');
-    await waitForRoute(url => url.searchParams.get('q') === 'simplecloud-detached');
+    await shell.executeJavaScript(`(() => {
+      const form = document.querySelector('.search');
+      form.querySelector('input').value = 'simplecloud-companion';
+      form.requestSubmit();
+    })()`);
+    await waitForRoute(url => url.searchParams.get('q') === 'simplecloud-companion');
+    if (!listeningOpen || listenSite.getURL() !== idleListenUrl) throw new Error('Browsing changed or closed the Listening window.');
     listeningWindow.close();
-    if (mode !== 'browser' || listeningWindow.isDestroyed() || !window.contentView.children.includes(view)) {
-      throw new Error('Closing the listening window did not dock the player.');
+    if (listeningOpen || listeningWindow.isDestroyed() || !window.contentView.children.includes(view)) {
+      throw new Error('Closing the Listening window did not leave the main player intact.');
     }
-    await waitForRoute(url => url.href === browserUrl);
-    if (await site.executeJavaScript('performance.timeOrigin') !== initialDocument) {
-      throw new Error('Detaching or returning to the browser page reloaded SoundCloud.');
+    if (new URL(site.getURL()).searchParams.get('q') !== 'simplecloud-companion'
+      || await site.executeJavaScript('performance.timeOrigin') !== initialDocument) {
+      throw new Error('Closing Listening changed or reloaded the main SoundCloud page.');
     }
     console.log('[probe] Listening mode:', JSON.stringify({ browser: before, listening: base, grown, restored: size }));
   }
 
-  async function checkVolumePopup(testLevels = true) {
+  async function checkVolumePopup(testLevels = true, listening = false) {
+    const chrome = listening ? listenShellView : shellView;
+    const shell = chrome.webContents;
+    const popupController = listening ? listenVolumePopup : volumePopup;
     const beforeTrack = await shell.executeJavaScript(`document.getElementById('mute').nextElementSibling.matches('.track')`);
     if (!beforeTrack) throw new Error('The speaker is not immediately before track information.');
     await shell.executeJavaScript(`document.getElementById('mute')
       .dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' }))`);
-    if (!volumePopup.visible()) throw new Error('Hovering the speaker did not reveal the volume popup.');
+    if (!popupController.visible()) throw new Error('Hovering the speaker did not reveal the volume popup.');
     const open = () => shell.executeJavaScript(`document.getElementById('mute')
       .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))`);
     await open();
-    const popup = volumePopup.view;
-    if (!popup || !volumePopup.visible()) throw new Error('The volume shortcut did not open the popup.');
-    const host = activeWindow();
+    const popup = popupController.view;
+    if (!popup || !popupController.visible()) throw new Error('The volume shortcut did not open the popup.');
+    const host = listening ? listeningWindow : window;
     const childViews = host.contentView.children;
-    const shellBounds = shellView.getBounds();
+    const shellBounds = chrome.getBounds();
     const anchor = await shell.executeJavaScript(`document.getElementById('mute').getBoundingClientRect().toJSON()`);
     const bounds = popup.getBounds();
     if (childViews.at(-1) !== popup || bounds.y + bounds.height !== Math.round(shellBounds.y + anchor.y)
@@ -1021,7 +1206,7 @@ function openShell() {
     if (!slider.vertical || slider.direction !== 'rtl') throw new Error('Volume is not vertical with maximum at the top.');
     const close = async () => {
       await popup.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
-      if (volumePopup.visible() || host.contentView.children.includes(popup)) throw new Error('Escape did not dismiss the volume popup.');
+      if (popupController.visible() || host.contentView.children.includes(popup)) throw new Error('Escape did not dismiss the volume popup.');
     };
     if (!testLevels) { await close(); return; }
     const setLevel = value => popup.webContents.executeJavaScript(`(() => {
@@ -1067,7 +1252,7 @@ function openShell() {
   }
 
   async function checkProbe() {
-    if (!probe || probing || !ready || !state) return;
+    if (!probe || probing || !readyShells.has(shell) || !readyShells.has(listenShell) || !state) return;
     probing = true;
     try {
       await site.executeJavaScript(`(() => {
@@ -1277,10 +1462,13 @@ function openShell() {
     }
   }
 
-  Promise.all([shell.loadFile(shellPath), site.loadURL(home)]).catch(error => {
+  Promise.all([shell.loadFile(shellPath), listenShell.loadFile(shellPath), site.loadURL(home)]).catch(error => {
     console.error('[shell] Startup failed:', error.message);
     if (probe) app.exit(1);
     else report('SoundCloud could not load. Check your connection and reopen SimpleCloud.');
+  });
+  listenDock.loadFile(listenDockPath).catch(error => {
+    if (!listenDock.isDestroyed()) console.warn('[shell] Could not load the listening window’s close button:', error.message);
   });
 }
 
