@@ -914,7 +914,7 @@ function findListenWaveform(doc, exact) {
   }
 }
 
-let sendListenPreviewAction, previewPosition, previewWaveform, previewLayer;
+let sendListenPreviewAction, previewPosition, previewWaveform, previewLayer, previewNative;
 const previewDocuments = new WeakSet();
 const previewPlayButton = '.playButton, button[aria-label^="play" i], button[aria-label^="pause" i]';
 
@@ -1024,14 +1024,76 @@ function makeListenPreviewLayer(waveform, art, scene) {
   return { element, art, copy, width: 0 };
 }
 
+function findNativeProgress(waveform) {
+  // The crossfade hero already ships a played/unplayed pair of bar groups in
+  // its own SVG. Drive that clip instead of cloning the bars, so SoundCloud's
+  // bars and comment layer stay exactly as the site drew them.
+  const svg = waveform.matches?.('svg') ? waveform : waveform.querySelector?.('svg');
+  const clip = svg?.querySelector('clipPath[id$="-played"] rect');
+  if (!clip) return;
+  const played = [...svg.querySelectorAll('g[clip-path]')]
+    .find(group => group.getAttribute('clip-path')?.includes('-played'));
+  if (played) played.style.fill = 'var(--special-color, #f50)';
+  const viewBox = svg.viewBox?.baseVal;
+  const length = viewBox?.width > 0 ? viewBox.width : waveform.getBoundingClientRect().width;
+  return { clip, length };
+}
+
+function paintNativeProgress(ratio, motion) {
+  const native = previewNative;
+  if (!native) return;
+  const target = Math.max(0, Math.min(1, ratio)) * native.length;
+  if (native.target === target) return;
+  native.target = target;
+  cancelAnimationFrame(native.frame);
+  native.frame = 0;
+  const duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : motion || 0;
+  const from = native.value;
+  if (!duration || Math.abs(target - from) < 1) {
+    native.value = target;
+    native.clip.setAttribute('width', String(target));
+    return;
+  }
+  const start = performance.now();
+  const step = now => {
+    const t = Math.min(1, (now - start) / duration);
+    native.value = from + (target - from) * t;
+    native.clip.setAttribute('width', String(native.value));
+    if (t < 1) native.frame = requestAnimationFrame(step);
+    else { native.frame = 0; native.value = target; }
+  };
+  native.frame = requestAnimationFrame(step);
+}
+
 function fitListenPreviewProgress(waveform) {
   if (!sendListenPreviewAction) return;
   if (waveform !== previewWaveform) {
     previewLayer?.element.remove();
     previewLayer = undefined;
+    cancelAnimationFrame(previewNative?.frame);
+    previewNative = undefined;
     previewWaveform = waveform;
   }
   if (!waveform) return;
+  const native = findNativeProgress(waveform);
+  if (native) {
+    previewLayer?.element.remove();
+    previewLayer = undefined;
+    if (previewNative?.clip !== native.clip) {
+      cancelAnimationFrame(previewNative?.frame);
+      previewNative = { ...native, value: Number(native.clip.getAttribute('width')) || 0, target: null, frame: 0 };
+    } else if (!previewNative.frame) {
+      const current = Number(native.clip.getAttribute('width')) || 0;
+      if (Math.abs(current - previewNative.value) > 1) {
+        previewNative.value = current;
+        previewNative.target = null;
+      }
+    }
+    paintListenPreviewProgress();
+    return;
+  }
+  cancelAnimationFrame(previewNative?.frame);
+  previewNative = undefined;
   const bounds = waveform.getBoundingClientRect();
   const scene = waveform.querySelector('.waveform__scene');
   // Crossfade renders the seek slider and waveform art in the same group.
@@ -1092,9 +1154,13 @@ function fitListenPreviewProgress(waveform) {
 }
 
 function paintListenPreviewProgress() {
+  const { trackId, ratio, motion } = previewPosition ?? {};
+  if (previewNative) {
+    paintNativeProgress(trackId === listeningTrack && Number.isFinite(ratio) ? ratio : 0, motion);
+    return;
+  }
   if (!previewLayer) return;
   const { element, copy, width } = previewLayer;
-  const { trackId, ratio, motion } = previewPosition ?? {};
   element.hidden = trackId !== listeningTrack || !Number.isFinite(ratio);
   if (element.hidden) return;
   const duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : motion;
@@ -1144,6 +1210,8 @@ function bindListenDrag(doc) {
 
 function unfitListenFrame() {
   previewLayer?.element.remove();
+  cancelAnimationFrame(previewNative?.frame);
+  previewNative = undefined;
   previewLayer = previewWaveform = undefined;
   legacyHero?.classList.remove('sc-listen-legacy');
   legacyHero?.style.removeProperty(listenContentOffset);
