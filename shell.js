@@ -7,7 +7,6 @@ const search = form.querySelector('input');
 const historyPanel = byId('search-history');
 const historyList = byId('search-history-list');
 const seek = byId('seek');
-const volume = byId('volume');
 const mute = byId('mute');
 const play = document.querySelector('[data-action="play"]');
 const cover = document.createElement('img');
@@ -27,7 +26,6 @@ const queueButton = document.querySelector('[data-action="queue"]');
 let player, drag, pending, statusTimer, queueOpen = false, queueSignature = '', queueItems = [];
 let historyEntries = [], historyFiltered = [], historyOpen = false, historyActive = -1;
 let listening = false;
-let currentVolume, pendingVolume, volumeTimer;
 
 function formatTime(seconds) {
   if (!Number.isFinite(seconds)) return '–:––';
@@ -48,16 +46,11 @@ function updateSeek() {
 }
 
 function renderVolume(state) {
-  currentVolume = state;
   const available = Number.isFinite(state?.volume);
-  mute.disabled = volume.disabled = !available;
-  const percent = available ? Math.round(state.volume * 100) : 0;
-  if (!available || Math.abs(percent - pendingVolume) <= 1) pendingVolume = undefined;
-  if (!volume.matches(':active')) volume.value = pendingVolume ?? percent;
-  volume.setAttribute('aria-valuetext', available ? `${volume.value}%` : 'Unavailable');
-  const muted = state?.muted === true || (available && percent === 0);
+  mute.disabled = !available;
+  const muted = state?.muted === true || state?.volume === 0;
   const label = muted ? 'Unmute' : 'Mute';
-  mute.title = label;
+  mute.title = `${label} · Arrow Up for volume`;
   mute.setAttribute('aria-label', label);
   mute.querySelector('use').setAttribute('href', muted ? '#i-muted' : '#i-volume');
 }
@@ -407,19 +400,19 @@ seek.addEventListener('change', () => {
   }, 1800);
 });
 seek.addEventListener('pointercancel', () => { drag = undefined; updateSeek(); });
-volume.addEventListener('input', () => {
-  pendingVolume = volume.valueAsNumber;
-  volume.setAttribute('aria-valuetext', `${pendingVolume}%`);
-  bridge.action('volume', pendingVolume / 100);
-  clearTimeout(volumeTimer);
-  volumeTimer = setTimeout(() => {
-    pendingVolume = undefined;
-    renderVolume(currentVolume);
-  }, 500);
-});
-mute.addEventListener('click', () => {
-  pendingVolume = undefined;
-  bridge.action('mute');
+function showVolume(focus = false) {
+  if (mute.disabled) return;
+  const { x, y, width, height } = mute.getBoundingClientRect();
+  bridge.action('volumePopup', { x, y, width, height, focus });
+}
+mute.addEventListener('pointerenter', event => { if (event.pointerType !== 'touch') showVolume(); });
+mute.addEventListener('click', () => bridge.action('mute'));
+document.addEventListener('keydown', event => {
+  if (event.key === 'ArrowUp' && event.target === mute) {
+    event.preventDefault();
+    showVolume(true);
+  }
+  if (event.key === 'Escape' && mute.getAttribute('aria-expanded') === 'true') bridge.action('volumeDismiss');
 });
 
 if (bridge) {
@@ -437,6 +430,11 @@ if (bridge) {
     playerBar.querySelector('.play:not(:disabled), [data-action="mode"]').focus();
   });
   bridge.onBlurSearch(closeHistory);
+  bridge.onVolumeOpened(() => mute.setAttribute('aria-expanded', 'true'));
+  bridge.onVolumeClosed(focus => {
+    mute.setAttribute('aria-expanded', 'false');
+    if (focus) mute.focus();
+  });
   bridge.onError(message => {
     const status = byId('status');
     status.textContent = message;

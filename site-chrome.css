@@ -40,12 +40,29 @@ html.sc-listen .l-footer { display: none !important; }
 /* Newer song pages render the hero in SoundCloud's same-origin crossfade
    iframe. The bridge marks that frame and fits the hero to its height. */
 html.sc-listen,
-html.sc-listen body { overflow: hidden !important; }
-html.sc-listen .fullHero {
+html.sc-listen body { overflow: hidden !important; background: #202124 !important; }
+html.sc-listen body,
+html.sc-listen body *:not(:is(.sc-listen-frame, .sc-listen-legacy, .sc-listen-legacy *, .sc-listen-placeholder)) {
+  visibility: hidden !important;
+}
+html.sc-listen :is(.sc-listen-frame, .sc-listen-legacy, .sc-listen-placeholder) { visibility: visible !important; }
+html.sc-listen .sc-listen-legacy {
+  position: fixed !important;
+  inset: 0 !important;
   width: 100% !important;
   max-width: none !important;
+  height: 100% !important;
   margin-inline: 0 !important;
   border-radius: 0 !important;
+  user-select: none;
+}
+html.sc-listen .sc-listen-placeholder {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #bdbfc3;
+  font: 14px "Segoe UI", system-ui, sans-serif;
   user-select: none;
 }
 html.sc-listen iframe.sc-listen-frame {

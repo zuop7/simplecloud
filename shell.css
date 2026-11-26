@@ -148,8 +148,26 @@ button.play:active:not(:disabled) { transform: scale(.96); }
 #duration { text-align: left; }
 #seek { flex: 1; min-width: 40px; width: 100%; margin: 0; accent-color: var(--wave); cursor: pointer; }
 #seek:disabled { opacity: .46; cursor: default; }
-.volume { display: flex; align-items: center; gap: 2px; margin-inline-end: 6px; }
-#volume { width: clamp(40px, 6vw, 72px); margin: 0; accent-color: var(--accent); cursor: pointer; }
+.volume-popup {
+  display: grid;
+  height: 100vh;
+  overflow: hidden;
+  grid-template: minmax(0, 1fr) / 1fr;
+  place-items: center;
+  padding: 10px 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+}
+#volume {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 24px;
+  height: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
 #volume:disabled { opacity: .46; cursor: default; }
 .track { flex: 0 1 232px; min-width: 96px; gap: 8px; }
 .cover { width: 36px; height: 36px; flex: none; display: grid; place-items: center; border-radius: 3px; overflow: hidden; background: var(--surface-raised); color: var(--muted); }

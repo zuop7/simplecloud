@@ -283,9 +283,11 @@ function openTrack(value, report) {
   return true;
 }
 
-let browserPage, cancelScrollRestore;
-function setListeningMode(on) {
+let browserPage, cancelScrollRestore, listeningTrack;
+function setListeningMode(on, trackId) {
   const root = document.documentElement;
+  listeningTrack = on ? trackId : null;
+  if (on && root.classList.contains('sc-listen')) { fitListenFrame(); return; }
   if (on === root.classList.contains('sc-listen')) return;
   cancelScrollRestore?.();
   if (on) {
@@ -297,6 +299,8 @@ function setListeningMode(on) {
   }
   root.classList.remove('sc-listen');
   unfitListenFrame();
+  listenPlaceholder?.remove();
+  listenPlaceholder = undefined;
   const page = browserPage;
   browserPage = undefined;
   if (!page) return;
@@ -361,7 +365,7 @@ function runAction(name, value, report) {
     return;
   }
   if (name === 'listenMode') {
-    setListeningMode(value === true);
+    setListeningMode(value.enabled, value.trackId);
     return;
   }
   if (name === 'queueJump' || name === 'queueRemove') {
@@ -711,7 +715,7 @@ const listenFrameCss = `
   html, body { overflow: hidden !important; }
   .sc-listen-scroll { height: 100vh !important; overflow: hidden !important; }
   main { width: 100% !important; max-width: none !important; margin-inline: 0 !important; height: 100vh !important; flex: 1 0 auto !important; overflow: hidden !important; }
-  main section:first-of-type {
+  main .sc-listen-hero {
     width: 100% !important;
     max-width: none !important;
     margin-inline: 0 !important;
@@ -721,8 +725,8 @@ const listenFrameCss = `
     border-radius: 0 !important;
     user-select: none;
   }
-  main section:first-of-type > div { height: 100% !important; min-height: 0 !important; }
-  main section:first-of-type > div > div > :last-child { width: auto !important; height: 100% !important; }
+  main .sc-listen-hero > div { height: 100% !important; min-height: 0 !important; }
+  main .sc-listen-hero > div > div > :last-child { width: auto !important; height: 100% !important; }
   .sc-listen-hero-footer { display: none !important; }
   .sc-listen-waveform-column {
     display: grid !important;
@@ -739,6 +743,7 @@ const listenFrameCss = `
 
 const listenWaveform = 'main section :is(.MuiSlider-root, div[role="slider"][aria-valuenow])';
 const waveformOffset = '--sc-listen-waveform-offset';
+let listenPlaceholder, fittedFrame, fittedDoc, fittedHero, legacyHero;
 
 function updateListenHeroFooter(doc, slider) {
   let hero, waveform, footer, titleRow;
@@ -792,10 +797,52 @@ function updateListenHeroFooter(doc, slider) {
 }
 
 function fitListenFrame() {
-  const frame = [...document.querySelectorAll('iframe.webiIframe')]
-    .find(element => element.contentDocument?.querySelector(listenWaveform));
-  if (!frame) { unfitListenFrame(); return; }
-  const doc = frame.contentDocument;
+  const onTrack = listeningTrack && location.pathname.replace(/\/$/, '') === listeningTrack;
+  let frame, doc, slider;
+  if (onTrack) {
+    for (const candidate of document.querySelectorAll('iframe.webiIframe[src]')) {
+      const target = new URL(candidate.src);
+      if (target.origin !== location.origin || target.pathname.replace(/\/$/, '') !== `/n${listeningTrack}`
+        || target.searchParams.get('embedded') !== 'crossfade') continue;
+      const content = candidate.contentDocument;
+      if (!content?.body) continue;
+      // src can already point at the next song while the old document still paints.
+      if (!candidate.hasAttribute('srcdoc') && new URL(content.URL).pathname !== target.pathname) continue;
+      const waveform = content.querySelector(listenWaveform);
+      if (!waveform) continue;
+      frame = candidate;
+      doc = content;
+      slider = waveform;
+      break;
+    }
+  }
+  const hero = slider?.closest('section');
+  const legacy = onTrack && !hero
+    ? document.querySelector('.fullListenHero.fullHero:has(.fullHero__waveform)') ?? undefined
+    : undefined;
+  if (frame !== fittedFrame || doc !== fittedDoc || hero !== fittedHero || legacy !== legacyHero) unfitListenFrame();
+  if (!hero && !legacy) {
+    if (!listenPlaceholder) {
+      listenPlaceholder = document.createElement('div');
+      listenPlaceholder.className = 'sc-listen-placeholder';
+      listenPlaceholder.setAttribute('role', 'status');
+      document.body.append(listenPlaceholder);
+    }
+    const message = listeningTrack ? 'Waiting for the track waveform…' : 'Play a track to see its waveform';
+    if (listenPlaceholder.textContent !== message) listenPlaceholder.textContent = message;
+    return;
+  }
+  listenPlaceholder?.remove();
+  listenPlaceholder = undefined;
+  if (legacy) {
+    legacyHero = legacy;
+    legacy.classList.add('sc-listen-legacy');
+    return;
+  }
+  fittedFrame = frame;
+  fittedDoc = doc;
+  fittedHero = hero;
+  hero.classList.add('sc-listen-hero');
   frame.classList.add('sc-listen-frame');
   bindListenDrag(doc);
   if (!doc.getElementById('sc-listen-frame')) {
@@ -804,7 +851,7 @@ function fitListenFrame() {
     style.textContent = listenFrameCss;
     (doc.head ?? doc.documentElement).append(style);
   }
-  updateListenHeroFooter(doc, doc.querySelector(listenWaveform));
+  updateListenHeroFooter(doc, slider);
   const scroller = [...doc.querySelectorAll('body > div')].find(element => element.querySelector('main'));
   if (scroller) {
     scroller.classList.add('sc-listen-scroll');
@@ -848,12 +895,15 @@ function bindListenDrag(doc) {
 }
 
 function unfitListenFrame() {
-  for (const frame of document.querySelectorAll('iframe.sc-listen-frame')) {
-    frame.classList.remove('sc-listen-frame');
-    const doc = frame.contentDocument;
-    doc?.getElementById('sc-listen-frame')?.remove();
-    if (doc) updateListenHeroFooter(doc, null);
+  legacyHero?.classList.remove('sc-listen-legacy');
+  fittedFrame?.classList.remove('sc-listen-frame');
+  fittedHero?.classList.remove('sc-listen-hero');
+  if (fittedDoc) {
+    fittedDoc.getElementById('sc-listen-frame')?.remove();
+    fittedDoc.querySelector('.sc-listen-scroll')?.classList.remove('sc-listen-scroll');
+    updateListenHeroFooter(fittedDoc, null);
   }
+  legacyHero = fittedFrame = fittedDoc = fittedHero = undefined;
 }
 
 
@@ -873,6 +923,7 @@ if (process.type === 'renderer') {
       const route = section();
       if (route !== lastSection) ipcRenderer.send('simplecloud:site-section', lastSection = route);
       publish(readPlayer(document.querySelector(playerSelector), location.href));
+      if (listeningTrack && !fittedFrame && !legacyHero) fitListenFrame();
     }, pollMs);
     const declutterTimer = setInterval(() => {
       declutter();
@@ -881,6 +932,9 @@ if (process.type === 'renderer') {
     }, 700);
     ipcRenderer.on('simplecloud:site-action', (_event, name, value) => {
       runAction(name, value, message => ipcRenderer.send('simplecloud:site-error', message));
+      if (name === 'listenMode' && Number.isSafeInteger(value.transition)) {
+        ipcRenderer.send('simplecloud:listen-skin', value.transition);
+      }
     });
     // A result counts as opened when its link is actually followed from the
     // results page. Play buttons and modified clicks are ignored.
