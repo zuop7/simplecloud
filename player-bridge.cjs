@@ -21,20 +21,32 @@ const homeExtra = /grab the keys and crank the radio|celebrate the return to the
 const homeFrames = 'iframe[src*="/n/embeds/home-sdui"], iframe.webiIframe';
 const rejectAll = /^(?:reject(?:\s+all)?|rifiuta(?:\s+(?:tutto|tutti|i\s+cookie|tutti\s+i\s+cookie))?)(?:\s+cookies)?$/i;
 
-function trackLink(href, baseUrl) {
+function soundCloudLink(href, baseUrl) {
   if (!href) return null;
   try {
     const url = new URL(href, baseUrl);
     if (url.protocol !== 'https:' || !['soundcloud.com', 'www.soundcloud.com'].includes(url.hostname)
       || url.port || url.username || url.password) return null;
-    const trackId = url.pathname.replace(/\/+$/, '');
-    if (!/^\/[^/]+\/[^/]+$/.test(trackId)) return null;
-    const context = url.searchParams.get('in');
-    const query = context ? `?${new URLSearchParams({ in: context })}` : '';
-    return { trackId, trackUrl: `${url.origin}${trackId}${query}` };
+    return url;
   } catch {
     return null;
   }
+}
+
+function trackLink(href, baseUrl) {
+  const url = soundCloudLink(href, baseUrl);
+  if (!url) return null;
+  const trackId = url.pathname.replace(/\/+$/, '');
+  if (!/^\/[^/]+\/[^/]+$/.test(trackId)) return null;
+  const context = url.searchParams.get('in');
+  const query = context ? `?${new URLSearchParams({ in: context })}` : '';
+  return { trackId, trackUrl: `${url.origin}${trackId}${query}` };
+}
+
+function artistPage(href, baseUrl) {
+  const url = soundCloudLink(href, baseUrl);
+  if (!url || !/^\/[^/]+\/?$/.test(url.pathname)) return null;
+  return `${url.origin}${url.pathname.replace(/\/$/, '')}`;
 }
 
 function readTime(element) {
@@ -135,6 +147,7 @@ function readPlayer(root, baseUrl) {
     ...link,
     title,
     artist,
+    artistUrl: artistPage(artistLink?.getAttribute('href'), baseUrl),
     artworkUrl: image ?? null,
     duration: readTime(query('.playbackTimeline__duration')),
     position: readTime(query('.playbackTimeline__timePassed')),
@@ -181,7 +194,7 @@ function createPublisher(send) {
       candidate = undefined;
       return;
     }
-    const key = JSON.stringify([state.status, state.trackId, state.title, state.artist,
+    const key = JSON.stringify([state.status, state.trackId, state.title, state.artist, state.artistUrl,
       state.artworkUrl, state.duration]);
     if (key !== candidate) {
       candidate = key;
@@ -373,6 +386,18 @@ function runAction(name, value, report) {
   }
   if (name === 'openUrl') {
     if (!openTrack(value, report)) report('That track isn\'t available.');
+    return;
+  }
+  if (name === 'openPlayerPage') {
+    const artist = value.kind === 'artist';
+    const selector = artist ? '.playbackSoundBadge__lightLink' : '.playbackSoundBadge__titleLink';
+    const badge = document.querySelector(`${playerSelector} ${selector}`);
+    const href = badge?.getAttribute('href');
+    const page = artist ? artistPage(href, location.href) : trackLink(href, location.href)?.trackUrl;
+    if (!page || page !== value.url) return;
+    const target = new URL(page);
+    const preferred = new URL(href, location.href).origin === location.origin ? badge : undefined;
+    routeInPlace(`${target.pathname}${target.search}`, preferred);
     return;
   }
   if (name === 'followTrack') {

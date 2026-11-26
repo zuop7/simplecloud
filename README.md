@@ -42,7 +42,9 @@ in with your email and password.
 **Browser mode.** SimpleCloud's own 52 px header replaces SoundCloud's nav:
 Home, Feed, Library, Favourites, Profile, search, an always-on-top pin and the
 listening-mode button. The bar along the bottom shows the current track with
-previous, play/pause, next, shuffle, repeat, seek and like. Hover over the
+previous, play/pause, next, shuffle, repeat, seek and like. Click the artist name
+to open their profile, or the track title to open the track, in the main window.
+Hover over the
 speaker for a vertical volume slider, or click it to mute. With the speaker
 focused, press `↑` to open the slider and `Esc` to close it. Both controls act
 on SoundCloud's own level. Use **Next up** for the queue.

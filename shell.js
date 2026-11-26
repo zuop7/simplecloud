@@ -10,6 +10,8 @@ const seek = byId('seek');
 const mute = byId('mute');
 const play = document.querySelector('[data-action="play"]');
 const repeat = document.querySelector('[data-action="repeat"]');
+const artist = byId('artist');
+const trackTitle = byId('track-title');
 const cover = document.createElement('img');
 cover.alt = '';
 cover.referrerPolicy = 'no-referrer';
@@ -55,6 +57,13 @@ function renderVolume(state) {
   mute.querySelector('use').setAttribute('href', muted ? '#i-muted' : '#i-volume');
 }
 
+function renderPageLink(link, label, url) {
+  link.textContent = label;
+  link.title = label;
+  if (url) link.setAttribute('href', url);
+  else link.removeAttribute('href');
+}
+
 function render({ state, route, pinned, mode, keepListenBar, queueOpen: showQueue }) {
   const next = state?.status === 'track' ? state : null;
   if (player?.trackId !== next?.trackId) drag = pending = undefined;
@@ -79,11 +88,9 @@ function render({ state, route, pinned, mode, keepListenBar, queueOpen: showQueu
   play.setAttribute('aria-label', playLabel);
   play.title = playLabel;
   play.querySelector('use').setAttribute('href', player?.isPlaying ? '#i-pause' : '#i-play');
-  byId('artist').hidden = !player;
-  byId('artist').textContent = player?.artist ?? '';
-  const title = byId('track-title');
-  title.textContent = player?.title ?? 'Nothing playing';
-  title.title = player?.title ?? '';
+  artist.hidden = !player;
+  renderPageLink(artist, player?.artist ?? '', player?.artistUrl);
+  renderPageLink(trackTitle, player?.title ?? 'Nothing playing', player?.trackUrl);
   const artwork = player?.artworkUrl;
   if (artwork && cover.getAttribute('src') !== artwork) {
     cover.hidden = true;
@@ -302,6 +309,13 @@ function setQueue(open) {
 }
 
 for (const button of nav) button.addEventListener('click', () => bridge.action('navigate', button.dataset.route));
+for (const [link, kind] of [[artist, 'artist'], [trackTitle, 'track']]) {
+  link.addEventListener('click', event => {
+    event.preventDefault();
+    const url = link.getAttribute('href');
+    if (url) bridge.action('openPlayerPage', { kind, url });
+  });
+}
 for (const button of playerButtons) {
   button.addEventListener('click', () => {
     const action = button.dataset.action;

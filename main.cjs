@@ -663,6 +663,19 @@ function openShell() {
     }
     if (name === 'focusSite') { (listening ? listenSite : site).focus(); return; }
     if (!isPlayerPage(site.getURL())) { report('Wait for SoundCloud to finish loading.', contents); return; }
+    if (name === 'openPlayerPage') {
+      if (state?.status !== 'track' || !['artist', 'track'].includes(value?.kind)) return;
+      const url = value.kind === 'artist' ? state.artistUrl : state.trackUrl;
+      if (value.url !== url || !isPlayerPage(url)) return;
+      scriptNavigation = { target: null, until: Date.now() + 3500 };
+      site.send('simplecloud:site-action', name, { kind: value.kind, url });
+      if (listening) {
+        if (window.isMinimized()) window.restore();
+        window.show();
+      }
+      site.focus();
+      return;
+    }
     if (name === 'navigate' && (!routeNames.has(value) || value === 'search')) return;
     if (name === 'search' && (typeof value !== 'string' || !value.trim() || value.length > 200)) return;
     if (name === 'openUrl' && (typeof value !== 'string' || !permittedPage(value)
@@ -1266,11 +1279,17 @@ function openShell() {
       fixture.className = 'playControls';
       fixture.innerHTML = '<div class="playControls__inner" role="contentinfo">'
         + '<a class="playbackSoundBadge__titleLink" href="${trackId}" title="Seek test"></a>'
-        + '<a class="playbackSoundBadge__lightLink">Probe</a>'
+        + '<a class="playbackSoundBadge__lightLink" href="/simplecloud-probe">Probe</a>'
         + '<span class="playbackTimeline__duration">2:00</span><span class="playbackTimeline__timePassed">0:00</span>'
         + '<div class="playbackTimeline__progressWrapper" style="width:300px;height:24px">'
         + '<div class="playbackTimeline__progressBar" style="width:0%"></div></div></div>';
       const rail = fixture.querySelector('.playbackTimeline__progressWrapper');
+      fixture.addEventListener('click', event => {
+        if (!event.target.matches('a[href]')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        fixture.dataset.opened = event.target.pathname;
+      });
       fixture.addEventListener('mousedown', event => {
         if (event.target !== rail || event.buttons !== 1) return;
         let ratio;
@@ -1300,6 +1319,13 @@ function openShell() {
       })()`);
       await waitFor(() => site.executeJavaScript(`Math.abs(Number(document.getElementById('simplecloud-seek-fixture').dataset.ratio) - .725) < .004`),
         'The shell seek did not reach the full SoundCloud rail.');
+      for (const [id, pathname] of [['artist', '/simplecloud-probe'], ['track-title', trackId]]) {
+        await shell.executeJavaScript(`document.getElementById(${JSON.stringify(id)}).click()`);
+        await waitFor(() => site.executeJavaScript(
+          `document.getElementById('simplecloud-seek-fixture').dataset.opened === ${JSON.stringify(pathname)}`),
+          `The ${id} link did not click SoundCloud's matching player link.`);
+      }
+      console.log('[probe] Artist and track links reach the native SoundCloud player links.');
     } finally {
       await site.executeJavaScript(`document.getElementById('simplecloud-seek-fixture').remove()`);
     }

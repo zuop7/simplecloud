@@ -69,7 +69,7 @@ test('reads a scoped, signed-in player snapshot without requiring a track route'
       ? [queueRow('/artist/next', 'Other', 'Next track', '1:00')] : [],
     querySelector: selector => ({
       '.playbackSoundBadge__titleLink': element({ title: 'Track', attrs: { href: '/artist/track' } }),
-      '.playbackSoundBadge__lightLink': element({ textContent: 'Artist' }),
+      '.playbackSoundBadge__lightLink': element({ textContent: 'Artist', attrs: { href: '/artist-profile/?ref=player' } }),
       '.playbackSoundBadge__avatar .sc-artwork[style]': element({ style: { backgroundImage: 'url("https://example.com/art.jpg")' } }),
       '.playbackTimeline__duration': element({ textContent: '1:58' }),
       '.playbackTimeline__timePassed': element({ textContent: '0:03' }),
@@ -83,7 +83,8 @@ test('reads a scoped, signed-in player snapshot without requiring a track route'
   };
   assert.deepEqual(readPlayer(root, base), {
     status: 'track', trackId: '/artist/track', trackUrl: 'https://soundcloud.com/artist/track',
-    title: 'Track', artist: 'Artist', artworkUrl: 'https://example.com/art.jpg',
+    title: 'Track', artist: 'Artist', artistUrl: 'https://soundcloud.com/artist-profile',
+    artworkUrl: 'https://example.com/art.jpg',
     duration: 118, position: 3, progress: .0275, isPlaying: true, shuffle: false, repeat: 'all', liked: true,
     queue: [{
       trackId: '/artist/next', trackUrl: 'https://soundcloud.com/artist/next',
