@@ -476,9 +476,11 @@ function openShell() {
     listenSite.loadURL(target).then(() => {
       if (listeningOpen && transition === listenTransition && target === idleListenUrl) listenView.setVisible(true);
     }).catch(() => {
-      if (!listeningOpen || transition !== listenTransition) return;
+      // A superseded load is normal when browsing quickly. Only a real failure
+      // on the current transition may replace the preview with a message.
+      if (!listeningOpen || transition !== listenTransition || listenSite.isDestroyed()) return;
       void listenSite.loadURL(listenMessage('Waveform unavailable for this track')).then(() => {
-        if (listeningOpen && transition === listenTransition) listenView.setVisible(true);
+        if (listeningOpen && transition === listenTransition && !listenSite.isDestroyed()) listenView.setVisible(true);
       }).catch(() => {});
     });
   };

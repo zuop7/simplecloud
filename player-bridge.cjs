@@ -990,8 +990,22 @@ function makeListenPreviewLayer(waveform, art, scene) {
     copy = art.localName === 'canvas' ? doc.createElement('canvas') : art.cloneNode(true);
     copy.removeAttribute('id');
     copy.style.position = 'absolute';
+    copy.style.left = '0';
+    copy.style.top = '0';
     if (art.localName === 'svg') {
-      copy.style.filter = 'brightness(0) saturate(100%) invert(39%) sepia(99%) saturate(2327%) hue-rotate(359deg) brightness(101%)';
+      // Recolour the cloned bars directly. A CSS filter can thin the 1 px
+      // strokes and leave the white original showing through between them.
+      copy.style.filter = 'none';
+      copy.style.color = '#f50';
+      copy.setAttribute('shape-rendering', 'geometricPrecision');
+      for (const node of copy.querySelectorAll('*')) {
+        const stroke = node.getAttribute('stroke');
+        const fill = node.getAttribute('fill');
+        // Inline styles win over the site's classes as well as attributes, so
+        // bars styled from CSS and bars styled inline are both recoloured.
+        if (fill !== 'none' && fill !== 'transparent') node.style.fill = '#f50';
+        if (stroke && stroke !== 'none') node.style.stroke = '#f50';
+      }
     }
     element.append(copy);
   } else {
@@ -999,7 +1013,10 @@ function makeListenPreviewLayer(waveform, art, scene) {
   }
   if (scene && copy) {
     // Put the played colour above the waveform and below the comment canvases.
-    element.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+    // Anchor it to the art's own box inside the scene so a fractional scene
+    // offset cannot double the bars into a chopped pattern.
+    if (getComputedStyle(scene).position === 'static') scene.style.position = 'relative';
+    element.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none';
     art.after(element);
   } else {
     doc.body.append(element);
@@ -1031,23 +1048,40 @@ function fitListenPreviewProgress(waveform) {
   }
   const { element, copy } = previewLayer;
   const artBounds = art?.getBoundingClientRect() ?? bounds;
-  if (!scene || !art) {
-    element.style.left = `${bounds.left}px`;
-    element.style.top = `${artBounds.top}px`;
+  if (art && scene) {
+    const sceneBounds = scene.getBoundingClientRect();
+    element.style.left = `${artBounds.left - sceneBounds.left}px`;
+    element.style.top = `${artBounds.top - sceneBounds.top}px`;
+    element.style.width = `${artBounds.width}px`;
     element.style.height = `${artBounds.height}px`;
-    if (art) element.style.width = `${bounds.width}px`;
+  } else if (art) {
+    element.style.left = `${artBounds.left}px`;
+    element.style.top = `${artBounds.top}px`;
+    element.style.width = `${artBounds.width}px`;
+    element.style.height = `${artBounds.height}px`;
+  } else {
+    element.style.left = `${bounds.left}px`;
+    element.style.top = `${bounds.top}px`;
+    element.style.width = '1px';
+    element.style.height = `${bounds.height}px`;
   }
   if (copy) {
-    copy.style.left = `${scene ? 0 : artBounds.left - bounds.left}px`;
+    copy.style.left = '0';
     copy.style.top = '0';
-    copy.style.width = `${artBounds.width}px`;
-    copy.style.height = `${artBounds.height}px`;
+    copy.style.width = '100%';
+    copy.style.height = '100%';
     if (art.localName === 'canvas' && art.width && art.height) {
       if (copy.width !== art.width) copy.width = art.width;
       if (copy.height !== art.height) copy.height = art.height;
       const ctx = copy.getContext('2d');
       ctx.globalCompositeOperation = 'copy';
       ctx.drawImage(art, 0, 0);
+      // On the newer hero the bars are about one device pixel wide. Draw the
+      // mask half a pixel to either side so the played colour fills the gaps
+      // instead of reading as a second, chopped waveform.
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.drawImage(art, -0.5, 0);
+      ctx.drawImage(art, 0.5, 0);
       ctx.globalCompositeOperation = 'source-in';
       ctx.fillStyle = '#f50';
       ctx.fillRect(0, 0, copy.width, copy.height);
