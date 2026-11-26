@@ -17,9 +17,9 @@ does in a browser.
 **SimpleCloud is not affiliated with, endorsed by or supported by SoundCloud**
 
 
-<img width="1190" height="314" alt="Annotation 2026-11-25 220810" src="https://github.com/user-attachments/assets/e1bf5a2e-0729-4d09-a7cc-1eaf85ba9f7e" />
+<img width="1209" height="335" alt="listen mode" src="https://github.com/user-attachments/assets/9c2758b6-cd0c-4acd-ba29-f2b0ad12d433" />
 
-<img width="1201" height="828" alt="Capture" src="https://github.com/user-attachments/assets/5d44c6d9-37c3-4247-9c0b-378930df3a41" />
+<img width="1224" height="848" alt="main window" src="https://github.com/user-attachments/assets/6e9f0491-b24d-467f-a23d-5c2560699df6" />
 
 
 
