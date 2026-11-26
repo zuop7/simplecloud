@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const {
-  trackLink, readTime, readPlayer, readQueue, createPublisher, isAllowedHomeModule, forYouCardKind, isRejectAll, toggleState
+  trackLink, readTime, readPlayer, readQueue, createPublisher, isAllowedHomeModule, forYouCardKind, isRejectAll, toggleState, repeatState
 } = require('../player-bridge.cjs');
 
 const base = 'https://soundcloud.com/discover';
@@ -83,7 +83,7 @@ test('reads a scoped, signed-in player snapshot without requiring a track route'
   assert.deepEqual(readPlayer(root, base), {
     status: 'track', trackId: '/artist/track', trackUrl: 'https://soundcloud.com/artist/track',
     title: 'Track', artist: 'Artist', artworkUrl: 'https://example.com/art.jpg',
-    duration: 118, position: 3, isPlaying: true, shuffle: false, repeat: true, liked: true,
+    duration: 118, position: 3, isPlaying: true, shuffle: false, repeat: 'all', liked: true,
     queue: [{
       trackId: '/artist/next', trackUrl: 'https://soundcloud.com/artist/next',
       title: 'Next track', artist: 'Other', duration: 60
@@ -150,6 +150,10 @@ test('reads shuffle and repeat from their state classes', () => {
   assert.equal(toggleState(element({ attrs: { 'aria-pressed': 'true' }, classes: ['m-none'] })), true);
   assert.equal(toggleState(element({ attrs: { 'aria-pressed': 'false' }, classes: ['m-active'] })), false);
   assert.equal(toggleState(null), null);
+  assert.equal(repeatState(element({ classes: ['m-one'], attrs: { 'aria-pressed': 'false' } })), 'one');
+  assert.equal(repeatState(element({ classes: ['m-all'] })), 'all');
+  assert.equal(repeatState(element({ classes: ['m-none'] })), 'off');
+  assert.equal(repeatState(null), null);
 });
 
 test('only rejects consent from an explicit reject-all label', () => {

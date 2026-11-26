@@ -66,6 +66,13 @@ function toggleState(button) {
   return button.matches('.m-active, .m-shuffling, .m-one, .m-all, .sc-button-selected, .selected');
 }
 
+function repeatState(button) {
+  if (!button) return null;
+  if (button.matches('.m-one')) return 'one';
+  if (button.matches('.m-all')) return 'all';
+  return toggleState(button) ? 'all' : 'off';
+}
+
 function enabled(element) {
   return Boolean(element && !element.matches(':disabled, .disabled, [aria-disabled="true"]'));
 }
@@ -126,7 +133,7 @@ function readPlayer(root, baseUrl) {
     position: readTime(query('.playbackTimeline__timePassed')),
     isPlaying: playingState(query(controlSelectors.play)),
     shuffle: toggleState(query(controlSelectors.shuffle)),
-    repeat: toggleState(query(controlSelectors.repeat)),
+    repeat: repeatState(query(controlSelectors.repeat)),
     liked: toggleState(query(controlSelectors.like)),
     ...volume,
     queue,
@@ -222,13 +229,14 @@ function inPageEvent(type, trigger) {
 // Navigate with the site's own router, using an existing link when possible and
 // a synthetic anchor otherwise. The header account button is excluded: clicking
 // it on a profile page opens the account menu instead of the profile root.
-function routeInPlace(value) {
+function routeInPlace(value, preferred) {
   let target;
   try { target = new URL(value, location.href); } catch { return false; }
   if (target.origin !== location.origin) return false;
+  const routable = anchor => anchor?.hasAttribute('href') && !anchor.hasAttribute('download')
+    && (!anchor.target || anchor.target === '_self') && !anchor.matches('a.header__userNavUsernameButton');
   const matches = anchor => {
-    if (anchor.hasAttribute('download') || (anchor.target && anchor.target !== '_self')) return false;
-    if (anchor.matches('a.header__userNavUsernameButton')) return false;
+    if (!routable(anchor)) return false;
     try {
       const url = new URL(anchor.getAttribute('href'), location.href);
       return url.origin === target.origin && url.pathname === target.pathname
@@ -237,7 +245,7 @@ function routeInPlace(value) {
       return false;
     }
   };
-  const existing = [...document.querySelectorAll('a[href]')].find(matches);
+  const existing = routable(preferred) ? preferred : [...document.querySelectorAll('a[href]')].find(matches);
   const anchor = existing ?? document.createElement('a');
   if (!existing) {
     anchor.href = `${target.pathname}${target.search}${target.hash}`;
@@ -283,10 +291,12 @@ function openTrack(value, report) {
   return true;
 }
 
-let browserPage, cancelScrollRestore, listeningTrack;
-function setListeningMode(on, trackId) {
+let browserPage, cancelScrollRestore, listeningTrack, listeningTitle, listeningSince;
+function setListeningMode(on, trackId, title) {
   const root = document.documentElement;
+  if (trackId !== listeningTrack) listeningSince = performance.now();
   listeningTrack = on ? trackId : null;
+  listeningTitle = on ? normalise(title) : '';
   if (on && root.classList.contains('sc-listen')) { fitListenFrame(); return; }
   if (on === root.classList.contains('sc-listen')) return;
   cancelScrollRestore?.();
@@ -357,6 +367,17 @@ function runAction(name, value, report) {
     if (!openTrack(value, report)) report('That track isn\'t available.');
     return;
   }
+  if (name === 'followTrack') {
+    const track = trackLink(value, location.href);
+    if (!track) return;
+    const target = new URL(track.trackUrl);
+    const badge = document.querySelector(`${playerSelector} .playbackSoundBadge__titleLink`);
+    const badgeTrack = trackLink(badge?.getAttribute('href'), location.href);
+    const preferred = badgeTrack?.trackId === track.trackId && new URL(badgeTrack.trackUrl).origin === location.origin
+      ? badge : undefined;
+    routeInPlace(`${target.pathname}${target.search}`, preferred);
+    return;
+  }
   if (name === 'hideComments') {
     const root = document.documentElement;
     root.classList.toggle('sc-hide-comments', value === true);
@@ -365,7 +386,7 @@ function runAction(name, value, report) {
     return;
   }
   if (name === 'listenMode') {
-    setListeningMode(value.enabled, value.trackId);
+    setListeningMode(value.enabled, value.trackId, value.title);
     return;
   }
   if (name === 'queueJump' || name === 'queueRemove') {
@@ -742,6 +763,7 @@ const listenFrameCss = `
 `;
 
 const listenWaveform = 'main section :is(.MuiSlider-root, div[role="slider"][aria-valuenow])';
+const trackHeading = 'h1, h2, [role="heading"]:is([aria-level="1"], [aria-level="2"])';
 const waveformOffset = '--sc-listen-waveform-offset';
 let listenPlaceholder, fittedFrame, fittedDoc, fittedHero, legacyHero;
 
@@ -797,18 +819,19 @@ function updateListenHeroFooter(doc, slider) {
 }
 
 function fitListenFrame() {
-  const onTrack = listeningTrack && location.pathname.replace(/\/$/, '') === listeningTrack;
+  const onTrack = listeningTrack && listeningPath(location.href) === listeningTrack;
   let frame, doc, slider;
-  if (onTrack) {
-    for (const candidate of document.querySelectorAll('iframe.webiIframe[src]')) {
-      const target = new URL(candidate.src);
-      if (target.origin !== location.origin || target.pathname.replace(/\/$/, '') !== `/n${listeningTrack}`
-        || target.searchParams.get('embedded') !== 'crossfade') continue;
+  if (listeningTrack) {
+    for (const candidate of document.querySelectorAll('iframe.webiIframe, iframe[src]')) {
       const content = candidate.contentDocument;
       if (!content?.body) continue;
-      // src can already point at the next song while the old document still paints.
-      if (!candidate.hasAttribute('srcdoc') && new URL(content.URL).pathname !== target.pathname) continue;
-      const waveform = content.querySelector(listenWaveform);
+      const loadedPath = listeningPath(content.URL);
+      const sourcePath = listeningPath(candidate.src);
+      // A real frame document can lag behind its src when tracks change.
+      const exact = loadedPath === listeningTrack
+        || (candidate.hasAttribute('srcdoc') && sourcePath === listeningTrack);
+      if (!exact && (!onTrack || !candidate.classList.contains('webiIframe'))) continue;
+      const waveform = findListenWaveform(content, exact);
       if (!waveform) continue;
       frame = candidate;
       doc = content;
@@ -818,7 +841,7 @@ function fitListenFrame() {
   }
   const hero = slider?.closest('section');
   const legacy = onTrack && !hero
-    ? document.querySelector('.fullListenHero.fullHero:has(.fullHero__waveform)') ?? undefined
+    ? document.querySelector('.fullHero:has(.fullHero__waveform)') ?? findListenWaveform(document, false)?.closest('section')
     : undefined;
   if (frame !== fittedFrame || doc !== fittedDoc || hero !== fittedHero || legacy !== legacyHero) unfitListenFrame();
   if (!hero && !legacy) {
@@ -828,7 +851,8 @@ function fitListenFrame() {
       listenPlaceholder.setAttribute('role', 'status');
       document.body.append(listenPlaceholder);
     }
-    const message = listeningTrack ? 'Waiting for the track waveform…' : 'Play a track to see its waveform';
+    const message = !listeningTrack ? 'Play a track to see its waveform'
+      : performance.now() - listeningSince < 6000 ? 'Waiting for the track waveform…' : 'Waveform unavailable for this track';
     if (listenPlaceholder.textContent !== message) listenPlaceholder.textContent = message;
     return;
   }
@@ -856,6 +880,25 @@ function fitListenFrame() {
   if (scroller) {
     scroller.classList.add('sc-listen-scroll');
     if (scroller.scrollTop) scroller.scrollTop = 0;
+  }
+}
+
+function listeningPath(value) {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.origin !== location.origin) return null;
+    return url.pathname.replace(/^\/n(?=\/[^/]+\/[^/]+\/?$)/, '').replace(/\/$/, '');
+  } catch {
+    return null;
+  }
+}
+
+function findListenWaveform(doc, exact) {
+  for (const waveform of doc.querySelectorAll(listenWaveform)) {
+    if (exact) return waveform;
+    const headings = waveform.closest('section')?.querySelectorAll(trackHeading) ?? [];
+    if (listeningTitle && [...headings].some(heading => normalise(heading.textContent) === listeningTitle)) return waveform;
   }
 }
 
@@ -968,5 +1011,6 @@ if (process.type === 'renderer') {
     });
   }
 } else {
-  module.exports = { trackLink, readTime, readPlayer, readQueue, createPublisher, isAllowedHomeModule, forYouCardKind, isRejectAll, toggleState };
+  module.exports = { trackLink, readTime, readPlayer, readQueue, createPublisher, isAllowedHomeModule,
+    forYouCardKind, isRejectAll, toggleState, repeatState };
 }

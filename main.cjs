@@ -66,7 +66,7 @@ function restrictNavigation(contents, allow = permittedPage) {
 
 function readGeometry(file) {
   try {
-    const { x, y, width, height, maximized, pinned } = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const { x, y, width, height, maximized, pinned, keepListenBar } = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (![x, y, width, height].every(Number.isInteger) || width < minWidth || height < minHeight) return {};
     const display = screen.getDisplayMatching({ x, y, width, height }).workArea;
     const w = Math.min(width, Math.max(display.width, minWidth));
@@ -74,7 +74,7 @@ function readGeometry(file) {
     return {
       x: Math.max(display.x, Math.min(x, display.x + display.width - w)),
       y: Math.max(display.y, Math.min(y, display.y + display.height - h)),
-      width: w, height: h, maximized: maximized === true, pinned: pinned === true
+      width: w, height: h, maximized: maximized === true, pinned: pinned === true, keepListenBar: keepListenBar === true
     };
   } catch {
     return {};
@@ -134,7 +134,7 @@ function openShell() {
   if (!probe) {
     try { hideComments = JSON.parse(fs.readFileSync(commentsFile, 'utf8')) === true; } catch { /* default off */ }
   }
-  const { maximized, pinned: savedPin, ...bounds } = probe ? {} : readGeometry(geometryFile);
+  const { maximized, pinned: savedPin, keepListenBar: savedBar, ...bounds } = probe ? {} : readGeometry(geometryFile);
   const window = new BrowserWindow({
     title: 'SimpleCloud', icon: appIcon, width: 1200, height: 850, ...bounds,
     minWidth, minHeight, frame: false, roundedCorners: true,
@@ -199,10 +199,11 @@ function openShell() {
   let listenHover = false;
   let hoverChangedAt;
   let listenKeyboard = false;
+  let keepListenBar = savedBar === true;
   let hoverTimer;
   let cornersApplied = false;
   const showListenBar = () => {
-    const visible = mode !== 'listen' || queueOpen || listenHover || listenKeyboard || volumePopup.visible();
+    const visible = mode !== 'listen' || keepListenBar || queueOpen || listenHover || listenKeyboard || volumePopup.visible();
     if (!visible && shell.isFocused() && listeningWindow.isFocused()) site.focus();
     shellView.setVisible(visible);
   };
@@ -266,7 +267,7 @@ function openShell() {
     window.on('close', () => {
       try {
         fs.writeFileSync(geometryFile, JSON.stringify({
-          ...window.getNormalBounds(), maximized: window.isMaximized(), pinned: window.isAlwaysOnTop()
+          ...window.getNormalBounds(), maximized: window.isMaximized(), pinned: window.isAlwaysOnTop(), keepListenBar
         }));
       } catch (error) {
         console.warn('[shell] Could not save window position:', error.message);
@@ -349,12 +350,12 @@ function openShell() {
     if (!isPlayerPage(site.getURL())) { view.setVisible(mode === 'browser'); return; }
     view.setVisible(false);
     site.send('simplecloud:site-action', 'listenMode', {
-      enabled: mode === 'listen', trackId: state?.trackId, transition: ++listenTransition
+      enabled: mode === 'listen', trackId: state?.trackId, title: state?.title, transition: ++listenTransition
     });
   };
   const broadcast = () => {
     if (ready && !shell.isDestroyed()) {
-      shell.send('simplecloud:shell-state', { state, route, pinned: activeWindow().isAlwaysOnTop(), mode });
+      shell.send('simplecloud:shell-state', { state, route, pinned: activeWindow().isAlwaysOnTop(), mode, keepListenBar });
     }
     volumePopup.setLevel(state?.volume);
   };
@@ -373,13 +374,14 @@ function openShell() {
     if (followRequest?.url === state.trackUrl && followRequest.until > now) return;
     try {
       const current = new URL(site.getURL());
-      if (current.pathname.replace(/\/$/, '') === new URL(state.trackUrl).pathname.replace(/\/$/, '')) return;
+      if (current.pathname.replace(/^\/n(?=\/[^/]+\/[^/]+\/?$)/, '').replace(/\/$/, '')
+        === new URL(state.trackUrl).pathname.replace(/\/$/, '')) return;
     } catch {
       return;
     }
     followRequest = { url: state.trackUrl, until: now + 3500 };
     scriptNavigation = { target: undefined, until: followRequest.until };
-    site.send('simplecloud:site-action', 'openUrl', state.trackUrl);
+    site.send('simplecloud:site-action', 'followTrack', state.trackUrl);
   };
   const enterListen = () => {
     if (mode === 'listen') return;
@@ -499,6 +501,12 @@ function openShell() {
       const pinned = !activeWindow().isAlwaysOnTop();
       window.setAlwaysOnTop(pinned);
       listeningWindow.setAlwaysOnTop(pinned);
+      broadcast();
+      return;
+    }
+    if (name === 'keepBar' && mode === 'listen') {
+      keepListenBar = !keepListenBar;
+      showListenBar();
       broadcast();
       return;
     }
@@ -751,7 +759,7 @@ function openShell() {
       const frame = document.createElement('iframe');
       frame.id = 'simplecloud-listening-fixture';
       frame.className = 'webiIframe';
-      frame.src = '/n/simplecloud-probe/listening?embedded=crossfade';
+      frame.src = '/n/embeds/track-hero?layout=compact';
       frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:400px;height:260px';
       frame.srcdoc = '<main><section id="hero"><div><div style="display:flex">'
         + '<div id="column" style="display:flex;flex:1;flex-direction:column;justify-content:space-between;height:240px">'
@@ -807,7 +815,7 @@ function openShell() {
       throw new Error('Detached mode did not show just the compact window.');
     }
     const detachControl = await shell.executeJavaScript(`document.querySelector('[data-action="mode"] use').getAttribute('href')`);
-    if (detachControl !== '#i-listen') throw new Error('The dock button did not keep the headphones icon.');
+    if (detachControl !== '#i-window') throw new Error('The dock button did not use the browser-window icon.');
     listeningWindow.setContentSize(minListenWidth, base[1]);
     const fitsCompact = await shell.executeJavaScript(`(() => {
       const bar = document.querySelector('.player');
@@ -836,8 +844,8 @@ function openShell() {
     })()`);
     if (!placeholderOnly) throw new Error('Listening mode exposed Home or fitted a non-track iframe.');
     const previousState = state;
-    await site.executeJavaScript(`history.replaceState(history.state, '', '/simplecloud-probe/listening')`);
-    state = { ...state, trackId: '/simplecloud-probe/listening' };
+    await site.executeJavaScript(`history.replaceState(history.state, '', '/n/simplecloud-probe/listening/')`);
+    state = { ...state, trackId: '/simplecloud-probe/listening', title: 'Track' };
     syncListenSkin();
     const heroFrame = await site.executeJavaScript(`(() => {
       const frame = document.getElementById('simplecloud-listening-fixture');
@@ -880,8 +888,13 @@ function openShell() {
     await site.sendInputEvent({ type: 'keyDown', keyCode: 'F6' });
     if (!shellView.getVisible()) throw new Error('F6 did not reveal the listening bar.');
     await checkVolumePopup(false);
+    const toggleBar = () => shell.executeJavaScript(`document.querySelector('[data-action="keepBar"]').click()`);
+    await toggleBar();
     await shell.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
-    if (shellView.getVisible()) throw new Error('Escape did not hide the keyboard-revealed bar.');
+    const pressed = await shell.executeJavaScript(`document.querySelector('[data-action="keepBar"]').getAttribute('aria-pressed')`);
+    if (!shellView.getVisible() || pressed !== 'true') throw new Error('Keeping the bar visible did not survive keyboard dismissal.');
+    await toggleBar();
+    if (shellView.getVisible()) throw new Error('Releasing the bar did not restore hover-only behavior.');
     state = previousState;
     await site.executeJavaScript(`history.replaceState(history.state, '', ${JSON.stringify(browserUrl)})`);
     syncListenSkin();
@@ -974,6 +987,8 @@ function openShell() {
   }
 
   async function checkVolumePopup(testLevels = true) {
+    const beforeTrack = await shell.executeJavaScript(`document.getElementById('mute').nextElementSibling.matches('.track')`);
+    if (!beforeTrack) throw new Error('The speaker is not immediately before track information.');
     await shell.executeJavaScript(`document.getElementById('mute')
       .dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' }))`);
     if (!volumePopup.visible()) throw new Error('Hovering the speaker did not reveal the volume popup.');
@@ -1014,15 +1029,16 @@ function openShell() {
       slider.value = ${value};
       slider.dispatchEvent(new Event('input'));
     })()`);
-    const waitForVolume = async expected => {
+    const waitForVolume = async (expected, action) => {
       const deadline = Date.now() + 2500;
+      let value, native;
       do {
-        const value = await popup.webContents.executeJavaScript(`(() => {
+        value = await popup.webContents.executeJavaScript(`(() => {
           const slider = document.getElementById('volume');
           return slider.disabled ? null : slider.valueAsNumber;
         })()`);
         if (value !== null && expected === undefined) return value;
-        const native = await site.executeJavaScript(`(() => {
+        native = await site.executeJavaScript(`(() => {
           const value = document.querySelector('.volume__sliderWrapper')?.getAttribute('aria-valuenow');
           return value ? Number(value) * 100 : null;
         })()`);
@@ -1031,21 +1047,21 @@ function openShell() {
           && Math.abs(value - expected) <= tolerance && Math.abs(native - expected) <= tolerance) return value;
         await new Promise(resolve => setTimeout(resolve, 50));
       } while (Date.now() < deadline);
-      throw new Error(`The shell and SoundCloud did not agree on volume (${expected ?? 'initial level'}).`);
+      throw new Error(`Volume after ${action}: expected ${expected ?? 'available'}, shell ${value}, SoundCloud ${native}.`);
     };
     const clickMute = () => shell.executeJavaScript(`document.getElementById('mute').click()`);
-    const original = await waitForVolume();
+    const original = await waitForVolume(undefined, 'opening the popup');
     const target = original === 45 ? 70 : 45;
     await setLevel(target);
-    await waitForVolume(target);
+    await waitForVolume(target, 'setting the level');
     await clickMute();
-    await waitForVolume(0);
+    await waitForVolume(0, 'muting');
     await clickMute();
-    await waitForVolume(target);
+    await waitForVolume(target, 'unmuting');
     await setLevel(0);
-    await waitForVolume(0);
+    await waitForVolume(0, 'moving the slider to zero');
     await setLevel(original);
-    await waitForVolume(original);
+    await waitForVolume(original, 'restoring the original level');
     await close();
     console.log('[probe] Volume and mute follow the native SoundCloud player.');
   }

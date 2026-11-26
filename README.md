@@ -47,11 +47,11 @@ focused, press `↑` to open the slider and `Esc` to close it. Both controls act
 on SoundCloud's own level. Use **Next up** for the queue.
 
 **Listening mode** (`Ctrl+Shift+L`). The headphones button detaches the live
-player into a 1180×300 window without reloading SoundCloud. Click the headphones
-again or close the compact window to dock it. The player bar stays hidden until you hover the bottom
-edge or press `F6`, then it overlays the hero instead of shrinking it, so no
-footer or second bar ever appears. `Esc` hides it again, **Next up** grows the
-window downward, and the window follows whichever track is playing.
+player into a 1180×300 window without reloading SoundCloud. Click **Back to
+browser** (the window icon) or close the compact window to dock it. Hover the
+bottom edge or press `F6` to reveal the player bar over the waveform. Use
+**Keep player bar visible** to leave it on even when the pointer moves away.
+**Next up** grows the window downward, and the waveform follows the current track.
 
 **A quieter Home.** Only three blocks survive: your personalized shelf (Daily
 Drops and Weekly Wave), *More of what you like*, and *Mixed for you*. The Likes

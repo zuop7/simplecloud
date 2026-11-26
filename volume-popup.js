@@ -1,8 +1,12 @@
 const bridge = window.simpleCloud;
 const slider = document.getElementById('volume');
+const levelText = document.getElementById('volume-level');
 
 function updateLabel() {
-  slider.setAttribute('aria-valuetext', `${slider.value}%`);
+  const level = `${slider.value}%`;
+  levelText.textContent = slider.disabled ? '–' : level;
+  slider.setAttribute('aria-valuetext', level);
+  slider.style.setProperty('--volume-fill', level);
 }
 
 bridge.onVolume(level => {

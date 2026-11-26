@@ -9,6 +9,7 @@ const historyList = byId('search-history-list');
 const seek = byId('seek');
 const mute = byId('mute');
 const play = document.querySelector('[data-action="play"]');
+const repeat = document.querySelector('[data-action="repeat"]');
 const cover = document.createElement('img');
 cover.alt = '';
 cover.referrerPolicy = 'no-referrer';
@@ -55,21 +56,27 @@ function renderVolume(state) {
   mute.querySelector('use').setAttribute('href', muted ? '#i-muted' : '#i-volume');
 }
 
-function render({ state, route, pinned, mode }) {
+function render({ state, route, pinned, mode, keepListenBar }) {
   const next = state?.status === 'track' ? state : null;
   if (player?.trackId !== next?.trackId) drag = pending = undefined;
   player = next;
   if (pending && Math.abs(player.position - pending.position) <= 2) pending = undefined;
   for (const button of playerButtons) {
     const action = button.dataset.action;
-    if (action === 'queue' || action === 'pin' || action === 'mode') button.disabled = false;
+    if (action === 'queue' || action === 'pin' || action === 'mode' || action === 'keepBar') button.disabled = false;
     else button.disabled = !player?.controls?.[action];
     if (action === 'queue') button.setAttribute('aria-expanded', String(queueOpen));
     else if (action === 'pin') button.setAttribute('aria-pressed', String(pinned));
-    else if (action !== 'mode' && button.hasAttribute('aria-pressed')) {
+    else if (action === 'keepBar') button.setAttribute('aria-pressed', String(keepListenBar));
+    else if (action === 'repeat') button.setAttribute('aria-pressed', String(['one', 'all'].includes(player?.repeat)));
+    else if (button.hasAttribute('aria-pressed')) {
       button.setAttribute('aria-pressed', String(player?.[action === 'like' ? 'liked' : action] === true));
     }
   }
+  const repeatState = player?.repeat === 'one' ? 'One track' : player?.repeat === 'all' ? 'All tracks' : 'Off';
+  repeat.title = `Repeat: ${repeatState}`;
+  repeat.setAttribute('aria-description', repeatState);
+  repeat.querySelector('use').setAttribute('href', player?.repeat === 'one' ? '#i-repeat-one' : '#i-repeat');
   const playLabel = player?.isPlaying ? 'Pause' : 'Play';
   play.setAttribute('aria-label', playLabel);
   play.title = playLabel;
